@@ -1,0 +1,63 @@
+name: Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, develop]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+          cache: pip
+      - run: python -m pip install -r requirements-build.txt
+      - run: python -m ruff check .
+      - run: python -m pytest -q
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - run: python tools/make_icon.py
+      - run: python tools/collect_licenses.py
+      - run: python -m PyInstaller --noconfirm --clean DekstopShot.spec
+      - name: Package the complete Windows distribution
+        shell: pwsh
+        run: ./tools/package_release.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DekstopShot-Windows-x64
+          path: |
+            release/DekstopShot-Windows-x64.zip
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: DekstopShot-Windows-x64
+          path: release
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$env:RELEASE_TAG" `
+            release/DekstopShot-Windows-x64.zip release/SHA256SUMS.txt `
+            --verify-tag --title "DekstopShot $env:RELEASE_TAG" --generate-notes

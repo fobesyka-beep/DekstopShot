@@ -1,0 +1,17 @@
+.venv/
+.venv-python315-backup/
+.python312/
+.validation/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+build/
+dist/
+release/
+.idea/
+.tools/
+.env
+.env.*
+!.env.example
+*.log
