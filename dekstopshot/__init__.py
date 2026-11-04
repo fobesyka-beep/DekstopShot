@@ -1,3 +1,5 @@
 """DekstopShot — screen to clipboard for Windows."""
 
-__version__ = "1.0.0"
+from .version import VERSION as __version__
+
+__all__ = ["__version__"]

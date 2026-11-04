@@ -128,6 +128,24 @@ def test_legacy_settings_can_be_used_when_migration_cannot_be_saved(tmp_path, mo
     assert not store.path.exists()
 
 
+def test_first_launch_uses_system_language_and_persists_the_selection(tmp_path, monkeypatch):
+    monkeypatch.setattr("dekstopshot.i18n.system_language", lambda: "en")
+    store = SettingsStore(tmp_path / "settings.json")
+    initial = store.load()
+    assert initial.language == "en"
+    assert initial.hotkey_passthrough is True
+    store.save(initial)
+    monkeypatch.setattr("dekstopshot.i18n.system_language", lambda: "ru")
+    assert store.load().language == "en"
+
+
+def test_legacy_settings_gain_language_and_passthrough_without_losing_source(monkeypatch):
+    monkeypatch.setattr("dekstopshot.i18n.system_language", lambda: "ru")
+    settings = Settings.from_dict({"version": 1, "monitor_id": "pinned", "start_hidden": True})
+    assert settings.monitor_id == "pinned" and settings.start_hidden
+    assert settings.language == "ru" and settings.hotkey_passthrough is True
+
+
 def test_dib_is_bottom_up_32_bit_without_alpha_dependency():
     # Top row: red, green. Bottom row: blue, white. GDI's unused alpha bytes are zero.
     frame = Frame(2, 2, bytes([0, 0, 255, 0, 0, 255, 0, 0,

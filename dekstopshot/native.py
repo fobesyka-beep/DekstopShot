@@ -9,6 +9,7 @@ from ctypes import wintypes as W
 from pathlib import PureWindowsPath
 
 from .core import Frame, Hotkey, Monitor, WindowTarget
+from .i18n import t
 
 DWORD = C.c_uint32
 LONG = C.c_int32
@@ -169,11 +170,11 @@ class WindowsAPI:
     def _process_details(self, pid: int) -> tuple[str, int]:
         handle = self.kernel.OpenProcess(0x1000, False, pid)
         if not handle:
-            return "Приложение", 0
+            return t("Приложение"), 0
         try:
             path = C.create_unicode_buffer(32768)
             length = DWORD(len(path))
-            executable = "Приложение"
+            executable = t("Приложение")
             if self.kernel.QueryFullProcessImageNameW(handle, 0, path, C.byref(length)):
                 executable = PureWindowsPath(path.value).name
             creation, exit_time, kernel, user = (W.FILETIME() for _ in range(4))
@@ -229,8 +230,8 @@ class WindowsAPI:
     def register_hotkey(self, identifier: int, hotkey: Hotkey):
         if not self.user.RegisterHotKey(None, identifier, hotkey.modifiers | 0x4000, hotkey.vk):
             code = C.get_last_error()
-            raise OSError(code, f"Клавиша {hotkey.label} занята Windows или другим приложением. "
-                          "Выберите другое сочетание.")
+            raise OSError(code, t(f"Клавиша {hotkey.label} занята Windows или другим приложением. "
+                                  "Выберите другое сочетание."))
 
     def unregister_hotkey(self, identifier: int):
         self.user.UnregisterHotKey(None, identifier)

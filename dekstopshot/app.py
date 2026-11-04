@@ -9,24 +9,48 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThreadPool, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QScrollArea, QSystemTrayIcon, QVBoxLayout
 
 from .capture import CaptureJob, CapturePayload
-from .core import Hotkey, SettingsStore, WindowTarget, choose_monitor
+from .core import Hotkey, Settings, SettingsStore, WindowTarget, choose_monitor
 from .hotkeys import HotkeyManager
+from .i18n import set_language, t
 from .native import ClipboardBusy, WindowsAPI
 from .services import QUICK_LINKS
 from .ui import STYLE, GlassDialog, HotkeyDialog, MainWindow, app_icon, button, label, service_icon
+from .updates import ReleaseInfo, UpdateChecker
 
 log = logging.getLogger("dekstopshot")
 
+HELP_PARAGRAPHS = (
+    "1. Выберите монитор или открытое окно приложения.",
+    "2. Нажмите горячую клавишу. По умолчанию — минус над буквами.",
+    "3. Откройте нужную программу и нажмите Ctrl + V.",
+    "В блоке «Общее» выберите русский или английский язык. При первом запуске язык определяется по системе.",
+    "Если включено «Не блокировать клавишу», клавиша одновременно работает в других программах. "
+    "Выключите этот режим, чтобы зарезервировать сочетание для снимка. На паузе захват отключён.",
+    "Крестик и «Скрыть в трей» скрывают настройки. Чтобы открыть их снова, нажмите значок рядом с часами. "
+    "Для завершения выберите «Выйти из DekstopShot» в меню трея.",
+    "Для снимка приложения окно должно быть открыто и не свёрнуто. После закрытия окна или перезапуска "
+    "DekstopShot выберите его заново.",
+    "При запуске DekstopShot проверяет новые версии на GitHub. Если доступно обновление, откройте его страницу "
+    "по кнопке в настройках и скачайте архив. Автоматической установки нет.",
+    "Кнопки сервисов открывают сайты; снимок вставляется вручную. Google открывает обычный поиск. "
+    "Скриншоты не записываются в файлы и не отправляются приложением.",
+)
+
 
 class Controller(QObject):
-    def __init__(self, app: QApplication, api: WindowsAPI):
+    def __init__(self, app: QApplication, api: WindowsAPI, *, check_updates=True,
+                 store: SettingsStore | None = None, settings: Settings | None = None):
         super().__init__(app)
         self.app, self.api = app, api
-        self.store = SettingsStore()
-        self.settings = self.store.load()
+        self.store = store if store is not None else SettingsStore()
+        self.settings = settings if settings is not None else self.store.load()
+        set_language(self.settings.language)
+        self.update_release: ReleaseInfo | None = None
+        self.updater = UpdateChecker(self)
+        self.updater.available.connect(self._update_available)
         self.target: WindowTarget | None = None
         self.paused = self.busy = self.quitting = self.restore_window = False
         self.unavailable = True
@@ -40,7 +64,7 @@ class Controller(QObject):
         self.backdrop_refresh.setSingleShot(True)
         self.backdrop_refresh.setInterval(0)
         self.backdrop_refresh.timeout.connect(self._apply_backdrop)
-        self.hotkeys = HotkeyManager(api, app, self.settings.hotkey)
+        self.hotkeys = HotkeyManager(api, app, self.settings.hotkey, passthrough=self.settings.hotkey_passthrough)
         self._connect_ui()
         self._make_tray()
         self.display_refresh = QTimer(self)
@@ -54,7 +78,10 @@ class Controller(QObject):
         self.periodic_refresh.timeout.connect(self._refresh_if_visible)
         self.periodic_refresh.start()
         self.refresh_sources()
-        force_show = bool(self.store.warning) or self.unavailable
+        # Persist the first resolved language even when a 1.0 settings file
+        # already contains a pinned monitor and refresh_sources need not save.
+        settings_saved = self._save(self.settings)
+        force_show = bool(self.store.warning) or self.unavailable or not settings_saved
         try:
             self.hotkeys.resume()
         except OSError as error:
@@ -67,6 +94,8 @@ class Controller(QObject):
             self.show_window()
         else:
             self.window.hide()
+        if check_updates:
+            QTimer.singleShot(1200, self._check_updates)
 
     def _connect_ui(self):
         self.window.surface_shown.connect(self.backdrop_refresh.start)
@@ -78,6 +107,7 @@ class Controller(QObject):
         self.window.hotkey_requested.connect(self.change_hotkey)
         self.window.pause_requested.connect(self.toggle_pause)
         self.window.settings_requested.connect(self.change_option)
+        self.window.language_requested.connect(self.change_language)
         self.window.open_link.connect(self.open_link)
         self.window.help_requested.connect(self.show_help)
 
@@ -110,13 +140,20 @@ class Controller(QObject):
 
     def _make_tray(self):
         self.tray = QSystemTrayIcon(app_icon(), self)
+        self._refresh_tray_menu()
+        self.tray.activated.connect(self._tray_activated)
+        self.tray.messageClicked.connect(self.show_window)
+        self.tray.show()
+
+    def _refresh_tray_menu(self):
+        previous = getattr(self, "menu", None)
         self.menu = QMenu()
         self.menu.setStyleSheet(STYLE)
-        show = self.menu.addAction("Открыть DekstopShot")
+        show = self.menu.addAction(t("Открыть DekstopShot"))
         show.triggered.connect(self.show_window)
-        self.capture_action = self.menu.addAction("Сделать снимок")
+        self.capture_action = self.menu.addAction(t("Сделать снимок"))
         self.capture_action.triggered.connect(self.capture)
-        self.pause_action = QAction("Пауза", self.menu)
+        self.pause_action = QAction(t("Пауза"), self.menu)
         self.pause_action.setCheckable(True)
         self.pause_action.triggered.connect(self.toggle_pause)
         self.menu.addAction(self.pause_action)
@@ -125,12 +162,39 @@ class Controller(QObject):
             action = self.menu.addAction(service_icon(name), title)
             action.triggered.connect(lambda checked=False, u=url: self.open_link(u))
         self.menu.addSeparator()
-        quit_action = self.menu.addAction("Выйти из DekstopShot")
+        quit_action = self.menu.addAction(t("Выйти из DekstopShot"))
         quit_action.triggered.connect(self.quit)
         self.tray.setContextMenu(self.menu)
-        self.tray.activated.connect(self._tray_activated)
-        self.tray.messageClicked.connect(self.show_window)
-        self.tray.show()
+        if previous is not None:
+            previous.deleteLater()
+
+    def _check_updates(self):
+        if not self.quitting:
+            self.updater.start()
+
+    def _update_available(self, release: ReleaseInfo):
+        if self.quitting:
+            return
+        self.update_release = release
+        self.window.update_available(release.version, release.url)
+        self.tray.showMessage(t("Доступно обновление"),
+                              t("Доступна версия {version}. Откройте настройки, чтобы скачать её.",
+                                version=release.version),
+                              QSystemTrayIcon.MessageIcon.Information, 5000)
+
+    def change_language(self, language: str):
+        if language not in ("ru", "en") or language == self.settings.language:
+            return
+        if not self._save(replace(self.settings, language=language)):
+            self.window.retranslate(self.settings)
+            return
+        set_language(language)
+        self.window.retranslate(self.settings)
+        self._refresh_tray_menu()
+        self.refresh_sources()
+        self._update_state()
+        if self.update_release:
+            self.window.update_available(self.update_release.version, self.update_release.url)
 
     def _tray_activated(self, reason):
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
@@ -219,13 +283,32 @@ class Controller(QObject):
         self.refresh_sources()
 
     def change_option(self, name: str, enabled: bool):
-        if name != "start_hidden":
+        if name not in ("start_hidden", "hotkey_passthrough"):
             return
+        previous_mode = self.settings.hotkey_passthrough
+        if name == "hotkey_passthrough":
+            try:
+                self.hotkeys.set_passthrough(enabled)
+            except OSError as error:
+                self.error(str(error))
+                self.window.hotkey_passthrough.blockSignals(True)
+                self.window.hotkey_passthrough.setChecked(previous_mode)
+                self.window.hotkey_passthrough.blockSignals(False)
+                return
         if not self._save(replace(self.settings, **{name: enabled})):
+            if name == "hotkey_passthrough":
+                try:
+                    self.hotkeys.set_passthrough(previous_mode)
+                except OSError as error:
+                    self.paused = True
+                    self.hotkeys.suspend()
+                    self.hotkeys.set_passthrough(previous_mode)
+                    self.error(str(error))
             control = getattr(self.window, name)
             control.blockSignals(True)
             control.setChecked(getattr(self.settings, name))
             control.blockSignals(False)
+        self._update_state()
 
     def _update_state(self):
         self.window.set_state(self.paused, self.busy, self.unavailable)
@@ -233,8 +316,8 @@ class Controller(QObject):
         self.pause_action.setChecked(self.paused)
         self.pause_action.blockSignals(False)
         self.capture_action.setEnabled(not self.paused and not self.busy and not self.unavailable)
-        self.capture_action.setText(f"Сделать снимок  ·  {self.settings.hotkey.label}")
-        state = "пауза" if self.paused else "выберите источник" if self.unavailable else self.settings.hotkey.label
+        self.capture_action.setText(f"{t('Сделать снимок')}  ·  {self.settings.hotkey.label}")
+        state = t("пауза") if self.paused else t("выберите источник") if self.unavailable else self.settings.hotkey.label
         self.tray.setToolTip(f"DekstopShot · {state}")
 
     def toggle_pause(self):
@@ -352,9 +435,9 @@ class Controller(QObject):
 
     def error(self, message: str):
         log.warning("%s", message)
-        self.window.show_message(message, True)
+        self.window.show_message(t(message), True)
         # Report failures; successful captures stay silent in the system tray.
-        self.tray.showMessage("DekstopShot — требуется внимание", message,
+        self.tray.showMessage(t("DekstopShot — требуется внимание"), t(message),
                               QSystemTrayIcon.MessageIcon.Warning, 4500)
 
     def open_link(self, url: str):
@@ -364,31 +447,26 @@ class Controller(QObject):
     def show_help(self):
         dialog = GlassDialog(self.window)
         self._style_dialog(dialog)
-        dialog.setWindowTitle("Как пользоваться DekstopShot")
-        dialog.setMinimumWidth(480)
+        dialog.setWindowTitle(t("Как пользоваться DekstopShot"))
+        dialog.setMinimumSize(440, 400)
+        available = (self.window.screen() or self.app.primaryScreen()).availableGeometry()
+        dialog.resize(min(600, available.width() - 40), min(700, available.height() - 40))
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(28, 25, 28, 25)
         layout.setSpacing(16)
-        layout.addWidget(label("Снимок за одно нажатие", "title"))
-        layout.addWidget(label(
-            "1. Выберите монитор или открытое окно приложения.\n\n"
-            "2. Нажмите горячую клавишу. По умолчанию — минус над буквами.\n\n"
-            "3. Откройте ChatGPT, Gemini, Claude или нужную программу и нажмите Ctrl + V.\n\n"
-            "Крестик скрывает DekstopShot в трей. Чтобы открыть настройки, нажмите значок рядом с часами. "
-            "Для завершения выберите «Выйти из DekstopShot» в меню значка.\n\n"
-            "Одиночная клавиша резервируется для скриншота. Для обычного ввода минуса выберите сочетание "
-            "с Ctrl/Alt/Shift или включите паузу.\n\n"
-            "Для снимка приложения окно должно быть открыто и не свёрнуто. После его закрытия выберите "
-            "окно заново. Защищённые окна и DRM-видео могут блокировать захват.\n\n"
-            "Кнопки сервисов открывают сайты; снимок вставляется вручную. "
-            "Google открывает обычный поиск. Скриншоты не записываются в файлы и не отправляются приложением.",
-            wrap=True))
-        close = button("Понятно", role="primary")
+        layout.addWidget(label(t("Снимок за одно нажатие"), "title"))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(label("\n\n".join(t(paragraph) for paragraph in HELP_PARAGRAPHS), wrap=True))
+        layout.addWidget(scroll, 1)
+        close = button(t("Понятно"), role="primary")
         close.clicked.connect(dialog.accept)
         layout.addWidget(close)
         self.hotkeys.suspend()
         dialog.exec()
         dialog.deleteLater()
+        if self.quitting:
+            return
         if not self.paused:
             try:
                 self.hotkeys.resume()
@@ -401,6 +479,7 @@ class Controller(QObject):
         if self.quitting:
             return
         self.quitting = True
+        self.updater.close()
         self.hotkeys.close()
         self.tray.hide()
         self.window.hide()
@@ -430,12 +509,17 @@ def main() -> int:
     app.setWindowIcon(app_icon())
     app.setQuitOnLastWindowClosed(False)
     app.setStyle("Fusion")
+    startup_store = SettingsStore()
+    startup_settings = startup_store.load()
+    set_language(startup_settings.language)
     if not QSystemTrayIcon.isSystemTrayAvailable():
-        QMessageBox.critical(None, "DekstopShot", "Системный трей недоступен. Запустите приложение в обычном сеансе Windows.")
+        QMessageBox.critical(None, "DekstopShot",
+                             t("Системный трей недоступен. Запустите приложение в обычном сеансе Windows."))
         return 1
     mutex = api.acquire_instance()
     if not mutex:
-        QMessageBox.information(None, "DekstopShot уже работает", "Откройте значок DekstopShot в трее рядом с часами. Он может быть скрыт под стрелкой ↑.")
+        QMessageBox.information(None, t("DekstopShot уже работает"),
+                                t("Откройте значок DekstopShot в трее рядом с часами. Он может быть скрыт под стрелкой ↑."))
         return 0
     try:
         try:
@@ -446,13 +530,13 @@ def main() -> int:
 
         def exception_hook(exc_type, value, traceback):
             log.critical("Unhandled exception", exc_info=(exc_type, value, traceback))
-            text = "Произошла ошибка. Закройте DekstopShot и запустите его снова."
+            text = t("Произошла ошибка. Закройте DekstopShot и запустите его снова.")
             if log_path:
-                text += f"\nЖурнал: {log_path}"
+                text += "\n" + t("Журнал: {path}", path=log_path)
             QMessageBox.critical(None, "DekstopShot", text)
 
         sys.excepthook = exception_hook
-        controller = Controller(app, api)
+        controller = Controller(app, api, store=startup_store, settings=startup_settings)
         result = app.exec()
         controller.pool.waitForDone(10000)
         return result
