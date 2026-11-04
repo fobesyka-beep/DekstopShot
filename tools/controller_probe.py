@@ -63,8 +63,8 @@ def main() -> int:
     def initialize():
         nonlocal controller
         assert QSystemTrayIcon.isSystemTrayAvailable(), "System tray is not available"
-        SettingsStore().save(Settings(notifications=False, start_hidden=False))
-        controller = Controller(app, api)
+        SettingsStore().save(Settings(notifications=False, start_hidden=False, language="ru"))
+        controller = Controller(app, api, check_updates=False)
         pump(500)
         assert controller.hotkeys.registered, "Default hotkey was not registered"
         assert not controller.paused, "Controller started paused"
@@ -180,6 +180,24 @@ def main() -> int:
         return {"settings_round_trip": True, "window_mode": True, "start_hidden": True,
                 "hwnd_not_persisted": True, "path": str(controller.store.path)}
 
+    def language_and_key_mode():
+        previous_hwnd = controller.hwnd
+        previous_target = controller.target
+        controller.change_language("en")
+        pump()
+        assert controller.settings.language == "en"
+        assert controller.window.mode_combo.currentText() == "Application window"
+        assert controller.target == previous_target
+        assert controller.hwnd == previous_hwnd == int(controller.window.winId())
+        controller.change_option("hotkey_passthrough", False)
+        assert not controller.hotkeys.passthrough and controller.hotkeys.registered
+        controller.change_option("hotkey_passthrough", True)
+        assert controller.hotkeys.passthrough and controller.hotkeys.registered
+        assert SettingsStore().load().language == "en"
+        controller.change_language("ru")
+        return {"ru_en_switch_same_hwnd_target": True, "language_persisted": True,
+                "exclusive_and_passthrough_registered": True}
+
     try:
         if record("controller_initialize_real_tray_hotkey", initialize):
             record("native_toolwindow_visibility_backdrop_api", native_window)
@@ -187,6 +205,7 @@ def main() -> int:
                 record("controller_capturejob_wgc_clipboard_restore", capture_fixture)
             record("pause_releases_binding_resume_restores", pause_resume)
             record("close_to_tray_retains_hotkey_and_reopen", close_to_tray)
+            record("language_and_hotkey_mode_switch", language_and_key_mode)
             record("settings_persisted_without_window_handle", persisted)
     finally:
         if controller is not None:

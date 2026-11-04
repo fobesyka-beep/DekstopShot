@@ -20,6 +20,8 @@ from ctypes import wintypes as W
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .version import VERSION
+
 ROOT = Path.cwd() if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
 
 
@@ -273,7 +275,8 @@ def main(argv=None) -> int:
             pass  # WA_DeleteOnClose has already destroyed it.
         app.processEvents()
 
-    report = {"utc": datetime.now(timezone.utc).isoformat(), "platform": platform.platform(),
+    report = {"utc": datetime.now(timezone.utc).isoformat(), "app_version": VERSION,
+              "platform": platform.platform(),
               "python": platform.python_version(), "frozen": bool(getattr(sys, "frozen", False)), "results": results,
               "limitations": ["No physical WM_HOTKEY input", "No external app paste", "No Controller GUI test",
                               "No system monitor layout or DPI setting changes", "No visual Acrylic assertion"]}

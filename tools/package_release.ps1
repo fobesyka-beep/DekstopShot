@@ -23,7 +23,7 @@ if ($outputPath.StartsWith($distribution + [System.IO.Path]::DirectorySeparatorC
 [System.IO.Directory]::CreateDirectory($outputPath) | Out-Null
 
 # Refresh bundled documentation without changing the tested executable.
-foreach ($name in @("README.md", "VALIDATION.md", "LICENSE", "THIRD_PARTY_NOTICES.md")) {
+foreach ($name in @("README.md", "VALIDATION.md", "CHANGELOG.md", "LICENSE", "THIRD_PARTY_NOTICES.md")) {
     Copy-Item -LiteralPath (Join-Path $projectRoot $name) -Destination (Join-Path $distribution "_internal\$name") -Force
 }
 $bundledDocs = Join-Path $distribution "_internal\docs"

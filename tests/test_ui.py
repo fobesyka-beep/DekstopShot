@@ -6,7 +6,7 @@ from dekstopshot.ui import KeyRecorder, MainWindow
 
 
 def test_missing_monitor_is_explicit_and_does_not_select_first_available(qapp):
-    window = MainWindow(Settings(monitor_id="disconnected"))
+    window = MainWindow(Settings(monitor_id="disconnected", language="ru"))
     window.update_monitors([Monitor("available", "DISPLAY1", "Dell", 0, 0, 1920, 1080, True)], "disconnected")
     assert window.monitor_combo.currentData() is None
     assert "отключён" in window.monitor_detail.text()
@@ -14,7 +14,7 @@ def test_missing_monitor_is_explicit_and_does_not_select_first_available(qapp):
 
 
 def test_window_picker_distinguishes_identical_titles_by_handle_and_process(qapp):
-    window = MainWindow(Settings(capture_mode="window"))
+    window = MainWindow(Settings(capture_mode="window", language="ru"))
     one = WindowTarget(101, 1, 1000, "Документ", "notepad.exe")
     two = WindowTarget(202, 2, 2000, "Документ", "notepad.exe")
     window.update_windows([one, two], two)

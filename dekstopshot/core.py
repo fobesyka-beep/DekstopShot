@@ -10,6 +10,12 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+
+def _system_language() -> str:
+    from .i18n import system_language
+
+    return system_language()
+
 MOD_ALT = 1
 MOD_CONTROL = 2
 MOD_SHIFT = 4
@@ -95,6 +101,8 @@ class Settings:
     start_hidden: bool = False
     capture_mode: str = "monitor"
     version: int = 1
+    language: str = field(default_factory=_system_language)
+    hotkey_passthrough: bool = True
 
     @classmethod
     def from_dict(cls, data: dict) -> Settings:
@@ -107,15 +115,22 @@ class Settings:
         notifications = data.get("notifications", False)
         hidden = data.get("start_hidden", False)
         mode = data.get("capture_mode", "monitor")
+        language = data.get("language", _system_language())
+        passthrough = data.get("hotkey_passthrough", True)
         if not isinstance(monitor_id, str) or len(monitor_id) > 4096:
             raise ValueError("Некорректный идентификатор монитора.")
         if type(notifications) is not bool or type(hidden) is not bool:
             raise ValueError("Некорректные параметры настроек.")
         if mode not in ("monitor", "window"):
             raise ValueError("Неизвестный режим захвата.")
+        if language not in ("ru", "en"):
+            raise ValueError("Неизвестный язык интерфейса.")
+        if type(passthrough) is not bool:
+            raise ValueError("Некорректный режим горячей клавиши.")
         return cls(hotkey=Hotkey(key.get("vk", 0xBD), key.get("modifiers", 0)),
                    monitor_id=monitor_id, notifications=notifications,
-                   start_hidden=hidden, capture_mode=mode)
+                   start_hidden=hidden, capture_mode=mode,
+                   language=language, hotkey_passthrough=passthrough)
 
 
 class SettingsStore:

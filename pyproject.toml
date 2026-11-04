@@ -1,6 +1,6 @@
 [project]
 name = "dekstopshot"
-version = "1.0.0"
+version = "1.1.0"
 description = "A glass-style Windows screenshot app with tray, monitor and window capture"
 requires-python = ">=3.10,<3.14"
 

@@ -38,7 +38,9 @@ from PySide6.QtWidgets import (
 )
 
 from .core import Hotkey, Monitor, Settings, WindowTarget, choose_monitor
+from .i18n import canonical_source, get_language, set_language, system_language, t
 from .services import QUICK_LINKS
+from .version import DISPLAY_VERSION
 
 INK = "#f6fbff"
 MUTED = "#c0d2df"
@@ -261,8 +263,16 @@ def service_icon(name: str, size=24) -> QIcon:
     return QIcon(pixmap)
 
 
+def translated(widget, source: str, setter="setText", **values):
+    specs = getattr(widget, "_translation_specs", {})
+    specs[setter] = (canonical_source(source), values)
+    widget._translation_specs = specs
+    getattr(widget, setter)(t(source, **values))
+    return widget
+
+
 def label(text: str, role: str = "", wrap=False) -> QLabel:
-    result = QLabel(text)
+    result = translated(QLabel(), text)
     if role:
         result.setProperty("role", role)
     result.setWordWrap(wrap)
@@ -270,7 +280,7 @@ def label(text: str, role: str = "", wrap=False) -> QLabel:
 
 
 def button(text: str, name: str = "", role: str = "") -> QPushButton:
-    result = GlassButton(text)
+    result = translated(GlassButton(), text)
     if name:
         result.setIcon(icon(name, INK if role == "primary" else MUTED, 18))
     if role:
@@ -553,7 +563,7 @@ class DisplayMap(QWidget):
         self.hitboxes: list[tuple[QRectF, Monitor]] = []
         self.setMinimumHeight(108)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setAccessibleName("Расположение мониторов; выбор также доступен в списке ниже")
+        translated(self, "Расположение мониторов; выбор также доступен в списке ниже", "setAccessibleName")
 
     def set_monitors(self, monitors, selected_id):
         self.monitors, self.selected_id = monitors, selected_id
@@ -565,7 +575,7 @@ class DisplayMap(QWidget):
         self.hitboxes.clear()
         if not self.monitors:
             p.setPen(QColor(MUTED))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Мониторы не найдены")
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, t("Мониторы не найдены"))
             return
         left = min(m.left for m in self.monitors)
         top = min(m.top for m in self.monitors)
@@ -609,8 +619,8 @@ class LinkButton(GlassButton):
         self.setMinimumHeight(70)
         self.setMinimumWidth(156)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setAccessibleName(f"Открыть {title} в браузере")
-        self.setToolTip(f"Открыть {title} в браузере по умолчанию")
+        translated(self, "Открыть {title} в браузере", "setAccessibleName", title=title)
+        translated(self, "Открыть {title} в браузере по умолчанию", "setToolTip", title=title)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def paintEvent(self, event):
@@ -627,7 +637,7 @@ class LinkButton(GlassButton):
         p.drawText(QRectF(62, 13, self.width() - 82, 24), Qt.AlignmentFlag.AlignVCenter, self.title)
         p.setFont(font(10))
         p.setPen(QColor(MUTED))
-        p.drawText(QRectF(62, 37, self.width() - 72, 19), Qt.AlignmentFlag.AlignVCenter, self.subtitle)
+        p.drawText(QRectF(62, 37, self.width() - 72, 19), Qt.AlignmentFlag.AlignVCenter, t(self.subtitle))
         p.save()
         p.translate(self.width() - 23, 12)
         p.scale(.7, .7)
@@ -689,7 +699,7 @@ class GlassComboBox(QComboBox):
 
 
 class MainWindow(QWidget):
-    DEFAULT_SIZE = (940, 590)
+    DEFAULT_SIZE = (940, 620)
     MINIMUM_SIZE = (800, 520)
 
     surface_shown = Signal()
@@ -703,9 +713,11 @@ class MainWindow(QWidget):
     settings_requested = Signal(str, bool)
     open_link = Signal(str)
     help_requested = Signal()
+    language_requested = Signal(str)
 
     def __init__(self, settings: Settings):
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
+        set_language(getattr(settings, "language", system_language()))
         self.setWindowTitle("DekstopShot")
         self.setWindowIcon(app_icon())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -714,6 +726,7 @@ class MainWindow(QWidget):
         self.resize(*self.DEFAULT_SIZE)
         self.backdrop = False
         self.monitors: list[Monitor] = []
+        self._update_url = ""
         self._build(settings)
 
     def _build(self, settings):
@@ -734,31 +747,43 @@ class MainWindow(QWidget):
         logo_row.addStretch()
         side.addLayout(logo_row)
         side.addSpacing(3)
-        tagline = label("SCREEN TO CLIPBOARD", "eyebrow")
+        tagline = label("СНИМОК В БУФЕР", "eyebrow")
         tagline.setStyleSheet("font-size: 9px; letter-spacing: 1px; color: #c3deeb;")
         side.addWidget(tagline)
         side.addSpacing(23)
-        side.addWidget(button("  Скриншот", "capture", "navActive"))
         help_button = button("  Инструкция", "help", "nav")
         help_button.clicked.connect(self.help_requested)
         side.addWidget(help_button)
         side.addStretch()
         status = GlassPanel()
         status_layout = QVBoxLayout(status)
-        status_layout.setContentsMargins(14, 15, 12, 15)
-        status_layout.addWidget(label("ТИХИЙ РЕЖИМ", "eyebrow"))
-        status_layout.addSpacing(6)
-        status_layout.addWidget(label("Живёт в трее.\nВсегда под рукой.", wrap=True))
-        side.addWidget(status)
-        side.addSpacing(9)
+        status_layout.setContentsMargins(12, 14, 12, 12)
+        status_layout.setSpacing(8)
+        status_layout.addWidget(label("ОБЩЕЕ", "eyebrow"))
+        status_layout.addWidget(label("Язык", "muted"))
+        self.language_combo = GlassComboBox()
+        self.language_combo.setMinimumContentsLength(5)
+        self.language_combo.addItem("Русский", "ru")
+        self.language_combo.addItem("English", "en")
+        self.language_combo.setCurrentIndex(self.language_combo.findData(get_language()))
+        translated(self.language_combo, "Язык", "setAccessibleName")
+        self.language_combo.activated.connect(
+            lambda index: self.language_requested.emit(self.language_combo.itemData(index)))
+        status_layout.addWidget(self.language_combo)
         self.pause_button = button("  Пауза", "pause", "nav")
         self.pause_button.clicked.connect(self.pause_requested)
-        side.addWidget(self.pause_button)
-        hide_button = button("  Скрыть в трей", "hide", "nav")
+        status_layout.addWidget(self.pause_button)
+        hide_button = button("  Скрыть в трей", role="nav")
         hide_button.clicked.connect(self.close)
-        side.addWidget(hide_button)
+        status_layout.addWidget(hide_button)
+        self.update_button = button("")
+        self.update_button.setStyleSheet("font-size: 11px;")
+        self.update_button.clicked.connect(lambda: self.open_link.emit(self._update_url) if self._update_url else None)
+        self.update_button.hide()
+        status_layout.addWidget(self.update_button)
+        side.addWidget(status)
         side.addSpacing(8)
-        side.addWidget(label("WINDOWS  ·  1.0", "eyebrow"))
+        side.addWidget(label(f"WINDOWS  ·  {DISPLAY_VERSION}", "eyebrow"))
         root.addWidget(sidebar)
         divider = QFrame()
         divider.setFixedWidth(1)
@@ -774,14 +799,14 @@ class MainWindow(QWidget):
         main.setSpacing(12)
         header = DragHeader()
         header.setFixedHeight(28)
-        header.setAccessibleName("Перетащить окно настроек")
+        translated(header, "Перетащить окно настроек", "setAccessibleName")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.addStretch()
         close = button("", "close", "icon")
         close.setFixedSize(28, 28)
-        close.setToolTip("Скрыть в трей; DekstopShot продолжит работать")
-        close.setAccessibleName("Скрыть в трей")
+        translated(close, "Скрыть в трей; DekstopShot продолжит работать", "setToolTip")
+        translated(close, "Скрыть в трей", "setAccessibleName")
         close.clicked.connect(self.close)
         header_layout.addWidget(close)
         main.addWidget(header)
@@ -797,15 +822,15 @@ class MainWindow(QWidget):
         panel_head.addStretch()
         refresh = button("", "refresh", "icon")
         refresh.setFixedSize(26, 26)
-        refresh.setAccessibleName("Обновить список мониторов")
-        refresh.setToolTip("Обновить мониторы")
+        translated(refresh, "Обновить список мониторов", "setAccessibleName")
+        translated(refresh, "Обновить мониторы", "setToolTip")
         refresh.clicked.connect(self.refresh_requested)
         panel_head.addWidget(refresh)
         screen_layout.addLayout(panel_head)
         self.mode_combo = GlassComboBox()
-        self.mode_combo.addItem("Весь выбранный монитор", "monitor")
-        self.mode_combo.addItem("Окно приложения", "window")
-        self.mode_combo.setAccessibleName("Режим захвата: монитор или приложение")
+        self.mode_combo.addItem(t("Весь выбранный монитор"), "monitor")
+        self.mode_combo.addItem(t("Окно приложения"), "window")
+        translated(self.mode_combo, "Режим захвата: монитор или приложение", "setAccessibleName")
         self.mode_combo.setCurrentIndex(1 if settings.capture_mode == "window" else 0)
         self.mode_combo.activated.connect(lambda index: self.mode_requested.emit(self.mode_combo.itemData(index)))
         screen_layout.addWidget(self.mode_combo)
@@ -818,7 +843,7 @@ class MainWindow(QWidget):
         self.display_map.selected.connect(self.monitor_requested)
         monitor_page_layout.addWidget(self.display_map, 1)
         self.monitor_combo = GlassComboBox()
-        self.monitor_combo.setAccessibleName("Закреплённый монитор для скриншотов")
+        translated(self.monitor_combo, "Закреплённый монитор для скриншотов", "setAccessibleName")
         self.monitor_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.monitor_combo.setMinimumContentsLength(12)
         self.monitor_combo.activated.connect(self._monitor_changed)
@@ -837,7 +862,7 @@ class MainWindow(QWidget):
         self.window_title.setMaximumHeight(80)
         window_page_layout.addWidget(self.window_title, 1)
         self.window_combo = GlassComboBox()
-        self.window_combo.setAccessibleName("Открытые окна приложений")
+        translated(self.window_combo, "Открытые окна приложений", "setAccessibleName")
         self.window_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.window_combo.setMinimumContentsLength(12)
         self.window_combo.activated.connect(lambda index: self.window_requested.emit(self.window_combo.itemData(index)))
@@ -858,40 +883,63 @@ class MainWindow(QWidget):
         self.hotkey_label.setMinimumHeight(86)
         self.hotkey_label.setStyleSheet("font-size: 28px; font-weight: 600; color: #f6fcff; background: transparent;")
         key_layout.addWidget(self.hotkey_label)
-        key_layout.addWidget(label("Работает и при скрытом окне.", "muted", True))
         change_key = button("Изменить клавишу", "keyboard")
         change_key.clicked.connect(self.hotkey_requested)
         key_layout.addWidget(change_key)
-        note = label("Одиночная клавиша резервируется для снимка.", "muted", True)
-        note.setStyleSheet("font-size: 10px; color: #bad2df;")
-        key_layout.addWidget(note)
+        self.hotkey_passthrough = translated(QCheckBox(), "Не блокировать клавишу")
+        translated(self.hotkey_passthrough, "Передавать нажатие активному приложению", "setToolTip")
+        self.hotkey_passthrough.setChecked(getattr(settings, "hotkey_passthrough", True))
+        self.hotkey_passthrough.setStyleSheet("font-size: 10px; spacing: 6px;")
+        self.hotkey_passthrough.toggled.connect(
+            lambda value: self.settings_requested.emit("hotkey_passthrough", value))
+        key_layout.addWidget(self.hotkey_passthrough)
+        self.capture_status = label("Готово к работе. Скриншоты не сохраняются в файлы.", "muted", True)
+        self.capture_status.setMinimumHeight(42)
+        self.capture_status.setStyleSheet("font-size: 10px; color: #c3dbe7; padding: 2px 0;")
+        self.message = self.capture_status
+        key_layout.addWidget(self.capture_status)
         middle.addWidget(key_panel, 2)
         main.addLayout(middle)
 
         link_title = QHBoxLayout()
         link_title.addWidget(label("Продолжи с AI", "panelTitle"))
         link_title.addStretch()
-        hint = label("Снимок ждёт в буфере обмена", "muted")
-        hint.setStyleSheet("color: #bed7e3; font-size: 10px;")
-        link_title.addWidget(hint)
         main.addLayout(link_title)
         self.quick_links = QuickLinks()
         self.quick_links.open_link.connect(self.open_link)
         main.addWidget(self.quick_links)
         options = QHBoxLayout()
-        self.start_hidden = QCheckBox("При запуске — сразу в трей")
+        self.start_hidden = translated(QCheckBox(), "При запуске — сразу в трей")
         self.start_hidden.setChecked(settings.start_hidden)
         self.start_hidden.toggled.connect(lambda value: self.settings_requested.emit("start_hidden", value))
         options.addWidget(self.start_hidden)
         options.addStretch()
         main.addLayout(options)
-        self.message = label("Готово к работе. Скриншоты не сохраняются в файлы.", "muted", True)
-        self.message.setMinimumHeight(26)
-        self.message.setStyleSheet("font-size: 11px; color: #c3dbe7; padding: 2px 0;")
-        main.addWidget(self.message)
         main.addStretch()
         scroll.setWidget(content)
         root.addWidget(scroll, 1)
+
+    def retranslate(self, settings: Settings):
+        """Update the existing window without changing its HWND or signal connections."""
+        set_language(settings.language)
+        for widget in [self, *self.findChildren(QWidget)]:
+            for setter, (source, values) in getattr(widget, "_translation_specs", {}).items():
+                getattr(widget, setter)(t(source, **values))
+            QWidget.update(widget)
+        self.mode_combo.setItemText(0, t("Весь выбранный монитор"))
+        self.mode_combo.setItemText(1, t("Окно приложения"))
+        self.language_combo.setCurrentIndex(self.language_combo.findData(settings.language))
+        self.hotkey_passthrough.blockSignals(True)
+        self.hotkey_passthrough.setChecked(settings.hotkey_passthrough)
+        self.hotkey_passthrough.blockSignals(False)
+        self.update_mode(settings.capture_mode)
+        self.update_hotkey(settings.hotkey)
+
+    def update_available(self, version: str, url: str):
+        self._update_url = url
+        translated(self.update_button, "Обновление {version}", version=version)
+        translated(self.update_button, "Открыть страницу релиза {version}", "setToolTip", version=version)
+        self.update_button.show()
 
     def _monitor_changed(self, index):
         identity = self.monitor_combo.itemData(index)
@@ -905,12 +953,12 @@ class MainWindow(QWidget):
         try:
             selected = choose_monitor(monitors, selected_id)
             current_id = selected.id
-            self.monitor_detail.setText(f"Закреплён · {selected.resolution} px" +
-                                        (" · основной экран" if selected.primary else ""))
+            self.monitor_detail.setText(t("Закреплён · {resolution} px", resolution=selected.resolution) +
+                                        (t(" · основной экран") if selected.primary else ""))
         except ValueError as error:
             selected, current_id = None, selected_id
-            self.monitor_detail.setText(str(error))
-            self.monitor_combo.addItem("Закреплённый монитор недоступен", None)
+            self.monitor_detail.setText(t(str(error)))
+            self.monitor_combo.addItem(t("Закреплённый монитор недоступен"), None)
         for index, monitor in enumerate(monitors, 1):
             self.monitor_combo.addItem(f"{index}. {monitor.name}", monitor.id)
             item = self.monitor_combo.count() - 1
@@ -923,7 +971,7 @@ class MainWindow(QWidget):
     def update_windows(self, windows: list[WindowTarget], selected: WindowTarget | None):
         self.window_combo.blockSignals(True)
         self.window_combo.clear()
-        self.window_combo.addItem("Выберите открытое окно…", None)
+        self.window_combo.addItem(t("Выберите открытое окно…"), None)
         selected_index = 0
         for target in windows:
             self.window_combo.addItem(target.label, target)
@@ -935,7 +983,7 @@ class MainWindow(QWidget):
             target = self.window_combo.currentData()
             self.window_title.setText(target.title[:110])
         else:
-            self.window_title.setText("Окно закрыто — выберите другое" if selected else "Выберите окно приложения")
+            self.window_title.setText(t("Окно закрыто — выберите другое" if selected else "Выберите окно приложения"))
         self.window_combo.blockSignals(False)
 
     def update_mode(self, mode: str):
@@ -950,13 +998,13 @@ class MainWindow(QWidget):
 
     def set_state(self, paused=False, busy=False, unavailable=False):
         text = "На паузе" if paused else "Делаю снимок…" if busy else "Выберите источник" if unavailable else "Готов к работе"
-        self.setAccessibleDescription(text)
-        self.hotkey_label.setToolTip(text)
-        self.pause_button.setText("  Продолжить" if paused else "  Пауза")
+        self.setAccessibleDescription(t(text))
+        self.hotkey_label.setToolTip(t(text))
+        translated(self.pause_button, "  Продолжить" if paused else "  Пауза")
         self.pause_button.setIcon(icon("play" if paused else "pause", MUTED, 18))
 
     def show_message(self, text: str, error=False):
-        self.message.setText(text)
+        translated(self.message, text)
         self.message.setStyleSheet(f"font-size: 11px; color: {'#ffe1c5' if error else '#d0eaf8'}; padding: 2px 0;")
 
     def paintEvent(self, event):
@@ -992,7 +1040,7 @@ class KeyRecorder(GlassButton):
 
     def begin(self):
         self.recording = True
-        self.setText("Нажмите сочетание…")
+        self.setText(t("Нажмите сочетание…"))
         self.setFocus()
         self.grabKeyboard()
         self.begun.emit()
@@ -1025,7 +1073,7 @@ class KeyRecorder(GlassButton):
         if event.key() in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta, Qt.Key.Key_AltGr):
             return
         if event.modifiers() & Qt.KeyboardModifier.MetaModifier:
-            self.setText("Выберите без Win")
+            self.setText(t("Выберите без Win"))
             return
         flags = 0
         for qt_flag, flag in ((Qt.KeyboardModifier.ControlModifier, 2),
@@ -1036,7 +1084,7 @@ class KeyRecorder(GlassButton):
         try:
             candidate = Hotkey(int(event.nativeVirtualKey()), flags)
         except ValueError:
-            self.setText("Другая клавиша…")
+            self.setText(t("Другая клавиша…"))
             return
         self.candidate = candidate
         self.stop()
@@ -1050,7 +1098,7 @@ class HotkeyDialog(GlassDialog):
 
     def __init__(self, parent, hotkey: Hotkey):
         super().__init__(parent)
-        self.setWindowTitle("Горячая клавиша")
+        self.setWindowTitle(t("Горячая клавиша"))
         self.setFixedWidth(460)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 26, 28, 26)
@@ -1077,7 +1125,7 @@ class HotkeyDialog(GlassDialog):
         QTimer.singleShot(0, self.recorder.begin)
 
     def show_error(self, text: str):
-        self.error.setText(text)
+        self.error.setText(t(text))
         self.error.setStyleSheet("color: #ffd3b6;")
 
     def done(self, result):

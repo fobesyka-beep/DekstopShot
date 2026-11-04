@@ -4,6 +4,42 @@
 
 Все команды ниже выполняются в **PowerShell**. Исходники отправляются в Git, готовая программа — в **Releases** как ZIP всей папки. Ветки: `main` — стабильная версия, `develop` — разработка. Команды публикации выполняет владелец репозитория; подготовка этих файлов ничего на GitHub не отправляет.
 
+## Версия 1.1.0: обновление существующего репозитория
+
+Репозиторий и ветки уже созданы. Для этого выпуска не выполняйте `git init` и `git remote add` повторно. Откройте **Terminal в PyCharm** и используйте PowerShell. Подготовленные изменения находятся в рабочей папке; команды публикации ещё предстоит выполнить владельцу.
+
+```powershell
+Set-Location 'C:\Users\danbalyk\PycharmProjects\DekstopShot'
+git status --short
+git switch develop
+if ($LASTEXITCODE -ne 0) { throw 'Не удалось перейти в develop; сохраните изменения и проверьте git status.' }
+git pull --ff-only origin develop
+if ($LASTEXITCODE -ne 0) { throw 'Сначала согласуйте локальную и удалённую ветку develop.' }
+git add .
+git commit -m 'feat: release 1.1 with RU/EN, update checks and shared hotkeys'
+if ($LASTEXITCODE -ne 0) { throw 'Коммит не создан; проверьте git status перед продолжением.' }
+git push -u origin develop
+if ($LASTEXITCODE -ne 0) { throw 'Не удалось отправить develop.' }
+
+git switch main
+if ($LASTEXITCODE -ne 0) { throw 'Не удалось перейти в main; проверьте git status.' }
+git pull --ff-only origin main
+if ($LASTEXITCODE -ne 0) { throw 'Сначала согласуйте локальную и удалённую ветку main.' }
+git merge --no-ff develop -m 'Release DekstopShot 1.1.0'
+if ($LASTEXITCODE -ne 0) { throw 'Разрешите конфликты слияния перед отправкой main.' }
+git push origin main
+if ($LASTEXITCODE -ne 0) { throw 'Не удалось отправить main.' }
+git tag -a v1.1.0 -m 'DekstopShot 1.1.0'
+if ($LASTEXITCODE -ne 0) { throw 'Проверьте существующий тег; опубликованные теги не передвигайте.' }
+git push origin v1.1.0
+```
+
+После отправки тега откройте [Actions](https://github.com/fobesyka-beep/DekstopShot/actions) и дождитесь успешных заданий `build` и `release` для **v1.1.0**. Workflow опубликует ZIP и контрольную сумму в [Releases](https://github.com/fobesyka-beep/DekstopShot/releases). Описание выпуска берётся из [docs/releases/v1.1.0.md](releases/v1.1.0.md): это список конкретных изменений и ссылка Full Changelog.
+
+Если защита `main` требует pull request, после push в develop создайте PR `develop → main`, дождитесь слияния, затем обновите локальный main через `git pull --ff-only origin main` и выполните только команды нового тега. Не отключайте защиту ветки ради этих команд.
+
+Остальные разделы ниже — справка по **первоначальному созданию** репозитория и общим операциям. Для уже подготовленного выпуска 1.1 достаточно блока выше.
+
 ## 1. GitHub CLI и вход
 
 Git уже установлен на текущем компьютере. Установите GitHub CLI:
@@ -36,7 +72,7 @@ gh auth setup-git
 gh repo view fobesyka-beep/DekstopShot
 ```
 
-На момент подготовки документа репозиторий вернул 404 текущему подключению. Это может означать отсутствие доступа к приватному репозиторию или отсутствие самого репозитория. Если после входа под нужным аккаунтом репозиторий действительно ещё не создан:
+Репозиторий DekstopShot уже существует и доступен публично. Следующая команда нужна только при первоначальном создании другого репозитория, если он ещё не существует:
 
 ```powershell
 gh repo create fobesyka-beep/DekstopShot --public --description 'Windows screenshot tool with Liquid Glass UI, global hotkeys and clipboard support. Python / PySide6.'
@@ -46,7 +82,7 @@ gh repo create fobesyka-beep/DekstopShot --public --description 'Windows screens
 
 ## 2. Первый локальный коммит
 
-В текущей рабочей папке `.git` ещё нет. Этот блок предназначен для первого запуска:
+Этот блок предназначен только для новой рабочей папки без `.git`. В существующем проекте DekstopShot его выполнять не нужно:
 
 ```powershell
 Set-Location 'C:\Users\danbalyk\PycharmProjects\DekstopShot'
@@ -204,6 +240,6 @@ gh pr create --repo fobesyka-beep/DekstopShot --base main --head develop `
   --body 'Merge the tested development changes into main.'
 ```
 
-После проверки и слияния PR обновите `main` и создайте новый тег по разделу Releases. Планы английского интерфейса, ProxyAPI и автоматической отправки AI-ответов в Telegram перечислены в [README.md](../README.md); в текущую версию эти интеграции не входят.
+После проверки и слияния PR обновите `main` и создайте новый тег по разделу Releases. Русский и английский интерфейс доступны с версии 1.1. ProxyAPI и автоматическая отправка AI-ответов в Telegram остаются планами, перечисленными в [README.md](../README.md).
 
 Документация GitHub: [описание и topics через gh](https://cli.github.com/manual/gh_repo_edit), [создание Release](https://cli.github.com/manual/gh_release_create), [загрузка файлов](https://cli.github.com/manual/gh_release_upload).

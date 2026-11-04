@@ -9,6 +9,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--output", type=Path)
 parser.add_argument("--mode", choices=("monitor", "window"), default="monitor")
 parser.add_argument("--flat", action="store_true", help="Render the opaque fallback without a demonstration desktop")
+parser.add_argument("--language", choices=("ru", "en"), default="ru")
 args = parser.parse_args()
 if args.output and sys.platform != "win32":
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -57,7 +58,7 @@ class DemoDesktop(QWidget):
 
 
 scene = None
-window = MainWindow(Settings(capture_mode=args.mode))
+window = MainWindow(Settings(capture_mode=args.mode, language=args.language))
 window.resize(*MainWindow.DEFAULT_SIZE)
 width, height = window.width(), window.height()
 if not args.flat:
@@ -87,7 +88,9 @@ if not args.flat:
     caption = QLabel("DEKSTOPSHOT  /  LIQUID GLASS", scene)
     caption.setGeometry(56, 14, width - 12, 22)
     caption.setStyleSheet("background: transparent; color: #ecf7ff; font-size: 12px; letter-spacing: 2px;")
-    note = QLabel("Демонстрационный фон · интерфейс приложения с прозрачными стеклянными кнопками", scene)
+    note = QLabel("Demonstration background · application interface with transparent glass controls"
+                  if args.language == "en" else
+                  "Демонстрационный фон · интерфейс приложения с прозрачными стеклянными кнопками", scene)
     note.setGeometry(56, height + 68, width - 12, 25)
     note.setStyleSheet("background: transparent; color: #d2e5f1; font-size: 12px;")
     scene.show()
@@ -95,10 +98,13 @@ window.update_monitors([
     Monitor("demo-dell", "DISPLAY1", "DELL U2723QE", 0, 0, 2560, 1440, True),
     Monitor("demo-lg", "DISPLAY2", "LG UltraGear", -1920, 0, 1920, 1080),
 ], "demo-dell")
-target = WindowTarget(123, 456, 789, "Проект — Visual Studio Code", "Code.exe")
+target = WindowTarget(123, 456, 789, "Project — Visual Studio Code" if args.language == "en"
+                      else "Проект — Visual Studio Code", "Code.exe")
 window.update_windows([target], target if args.mode == "window" else None)
 window.update_mode(args.mode)
-window.show_message("Предпросмотр · демонстрационные мониторы, приложения и фон")
+window.show_message("Preview · demonstration monitors, application windows and background"
+                    if args.language == "en" else
+                    "Предпросмотр · демонстрационные мониторы, приложения и фон")
 window.show()
 app.processEvents()
 if args.output:

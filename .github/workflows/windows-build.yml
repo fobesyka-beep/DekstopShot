@@ -47,6 +47,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: DekstopShot-Windows-x64
@@ -58,6 +59,16 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$env:RELEASE_TAG" `
-            release/DekstopShot-Windows-x64.zip release/SHA256SUMS.txt `
-            --verify-tag --title "DekstopShot $env:RELEASE_TAG" --generate-notes
+          $notesPath = "docs/releases/$env:RELEASE_TAG.md"
+          $releaseArguments = @("release", "create", $env:RELEASE_TAG,
+            "release/DekstopShot-Windows-x64.zip", "release/SHA256SUMS.txt",
+            "--verify-tag", "--draft", "--title", "DekstopShot $env:RELEASE_TAG")
+          if (Test-Path -LiteralPath $notesPath) {
+            $releaseArguments += @("--notes-file", $notesPath)
+          } else {
+            $releaseArguments += "--generate-notes"
+          }
+          gh @releaseArguments
+          if ($LASTEXITCODE -ne 0) { throw "Release draft/upload failed" }
+          gh release edit "$env:RELEASE_TAG" --draft=false
+          if ($LASTEXITCODE -ne 0) { throw "Release publication failed" }
