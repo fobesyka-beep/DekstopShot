@@ -83,8 +83,11 @@ def test_language_switch_keeps_window_target_options_and_update_link(qapp):
     window.retranslate(english)
     window.update_monitors([monitor], monitor.id)
     texts = [child.text() for child in window.findChildren(QLabel)]
-    assert "GENERAL" in texts and "Capture source" in texts and "Hotkey" in texts
+    assert "Capture source" in texts and "Hotkey" in texts
+    assert "GENERAL" in texts and "Language" not in texts
     assert "SCREEN TO CLIPBOARD" in texts
+    general_heading = next(child for child in window.findChildren(QLabel) if child.text() == "GENERAL")
+    assert general_heading.alignment() == QtCore.Qt.AlignmentFlag.AlignCenter
     assert "Instructions" in [child.text().strip() for child in window.findChildren(QPushButton)]
     assert not any(child.text().strip() == "Скриншот" for child in window.findChildren(QPushButton))
     assert window.mode_combo.itemText(0) == "Entire selected monitor"
@@ -97,6 +100,7 @@ def test_language_switch_keeps_window_target_options_and_update_link(qapp):
     assert int(window.winId()) == hwnd
     window.retranslate(settings)
     assert "ОБЩЕЕ" in [child.text() for child in window.findChildren(QLabel)]
+    assert "СНИМОК В БУФЕР ОБМЕНА" in [child.text() for child in window.findChildren(QLabel)]
     assert window.update_button.text() == "Обновление 1.2.0"
     assert window.message is window.capture_status
     window.deleteLater()
@@ -109,4 +113,36 @@ def test_passthrough_preference_emits_only_user_changes(qapp):
     window.hotkey_passthrough.setChecked(False)
     window.hotkey_passthrough.setChecked(True)
     assert requested == [("hotkey_passthrough", False), ("hotkey_passthrough", True)]
+    window.deleteLater()
+
+
+def test_saving_preference_switches_language_without_emitting_setting_changes(qapp):
+    settings = Settings(language="ru", save_screenshots=False)
+    window = MainWindow(settings)
+    requested = []
+    window.settings_requested.connect(lambda name, value: requested.append((name, value)))
+    window.save_screenshots.setChecked(True)
+    assert requested == [("save_screenshots", True)]
+    saved = replace(settings, language="en", save_screenshots=True)
+    window.retranslate(saved)
+    assert window.save_screenshots.isChecked()
+    assert window.save_screenshots.text() == "Save to Pictures"
+    assert "Pictures" in window.capture_status.text()
+    assert requested == [("save_screenshots", True)]
+    window.retranslate(settings)
+    assert not window.save_screenshots.isChecked()
+    assert "буфере обмена" in window.capture_status.text()
+    assert requested == [("save_screenshots", True)]
+    window.deleteLater()
+
+
+def test_saving_status_sync_preserves_last_capture_feedback(qapp):
+    settings = Settings(language="ru", save_screenshots=False)
+    window = MainWindow(settings)
+    window.show_message("Скопировано · 400 × 300 px · 12:34:56 · Вставка: Ctrl + V")
+    window.sync_settings(replace(settings, save_screenshots=True))
+    assert window.save_screenshots.isChecked()
+    assert window.capture_status.text() == "Скопировано · 400 × 300 px · 12:34:56 · Вставка: Ctrl + V"
+    window.retranslate(replace(settings, language="en", save_screenshots=True))
+    assert window.capture_status.text() == "Copied · 400 × 300 px · 12:34:56 · Paste: Ctrl + V"
     window.deleteLater()

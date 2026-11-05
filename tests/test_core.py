@@ -144,6 +144,21 @@ def test_legacy_settings_gain_language_and_passthrough_without_losing_source(mon
     settings = Settings.from_dict({"version": 1, "monitor_id": "pinned", "start_hidden": True})
     assert settings.monitor_id == "pinned" and settings.start_hidden
     assert settings.language == "ru" and settings.hotkey_passthrough is True
+    assert settings.save_screenshots is False
+
+
+def test_picture_saving_is_opt_in_and_persists_without_changing_schema(tmp_path):
+    store = SettingsStore(tmp_path / "settings.json")
+    assert store.load().save_screenshots is False
+    store.save(Settings(save_screenshots=True))
+    assert store.load().save_screenshots is True
+    assert json.loads(store.path.read_text())["version"] == 1
+
+
+@pytest.mark.parametrize("value", [0, 1, "false", "true", None, [], {}])
+def test_picture_saving_setting_requires_a_boolean(value):
+    with pytest.raises(ValueError, match="сохранения"):
+        Settings.from_dict({"save_screenshots": value})
 
 
 def test_dib_is_bottom_up_32_bit_without_alpha_dependency():

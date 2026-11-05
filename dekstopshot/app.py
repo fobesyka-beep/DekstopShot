@@ -16,6 +16,7 @@ from .core import Hotkey, Settings, SettingsStore, WindowTarget, choose_monitor
 from .hotkeys import HotkeyManager
 from .i18n import set_language, t
 from .native import ClipboardBusy, WindowsAPI
+from .pictures import PictureSaveJob
 from .services import QUICK_LINKS
 from .ui import STYLE, GlassDialog, HotkeyDialog, MainWindow, app_icon, button, label, service_icon
 from .updates import ReleaseInfo, UpdateChecker
@@ -26,7 +27,7 @@ HELP_PARAGRAPHS = (
     "1. Выберите монитор или открытое окно приложения.",
     "2. Нажмите горячую клавишу. По умолчанию — минус над буквами.",
     "3. Откройте нужную программу и нажмите Ctrl + V.",
-    "В блоке «Общее» выберите русский или английский язык. При первом запуске язык определяется по системе.",
+    "В боковой панели выберите русский или английский язык. При первом запуске язык определяется по системе.",
     "Если включено «Не блокировать клавишу», клавиша одновременно работает в других программах. "
     "Выключите этот режим, чтобы зарезервировать сочетание для снимка. На паузе захват отключён.",
     "Крестик и «Скрыть в трей» скрывают настройки. Чтобы открыть их снова, нажмите значок рядом с часами. "
@@ -35,8 +36,10 @@ HELP_PARAGRAPHS = (
     "DekstopShot выберите его заново.",
     "При запуске DekstopShot проверяет новые версии на GitHub. Если доступно обновление, откройте его страницу "
     "по кнопке в настройках и скачайте архив. Автоматической установки нет.",
+    "Включите сохранение в «Изображения», чтобы каждый успешный снимок также сохранялся в PNG в подпапке "
+    "DekstopShot системной папки «Изображения». По умолчанию сохранение выключено. Буфер обмена работает в обоих режимах.",
     "Кнопки сервисов открывают сайты; снимок вставляется вручную. Google открывает обычный поиск. "
-    "Скриншоты не записываются в файлы и не отправляются приложением.",
+    "Приложение не отправляет скриншоты в сеть.",
 )
 
 
@@ -56,6 +59,8 @@ class Controller(QObject):
         self.unavailable = True
         self.dialog: HotkeyDialog | None = None
         self.job = None
+        self.save_current_capture = False
+        self.save_payload: CapturePayload | None = None
         self.pool = QThreadPool(self)
         self.pool.setMaxThreadCount(1)
         self.window = MainWindow(self.settings)
@@ -151,8 +156,6 @@ class Controller(QObject):
         self.menu.setStyleSheet(STYLE)
         show = self.menu.addAction(t("Открыть DekstopShot"))
         show.triggered.connect(self.show_window)
-        self.capture_action = self.menu.addAction(t("Сделать снимок"))
-        self.capture_action.triggered.connect(self.capture)
         self.pause_action = QAction(t("Пауза"), self.menu)
         self.pause_action.setCheckable(True)
         self.pause_action.triggered.connect(self.toggle_pause)
@@ -283,7 +286,7 @@ class Controller(QObject):
         self.refresh_sources()
 
     def change_option(self, name: str, enabled: bool):
-        if name not in ("start_hidden", "hotkey_passthrough"):
+        if name not in ("start_hidden", "hotkey_passthrough", "save_screenshots") or type(enabled) is not bool:
             return
         previous_mode = self.settings.hotkey_passthrough
         if name == "hotkey_passthrough":
@@ -311,12 +314,11 @@ class Controller(QObject):
         self._update_state()
 
     def _update_state(self):
+        self.window.sync_settings(self.settings)
         self.window.set_state(self.paused, self.busy, self.unavailable)
         self.pause_action.blockSignals(True)
         self.pause_action.setChecked(self.paused)
         self.pause_action.blockSignals(False)
-        self.capture_action.setEnabled(not self.paused and not self.busy and not self.unavailable)
-        self.capture_action.setText(f"{t('Сделать снимок')}  ·  {self.settings.hotkey.label}")
         state = t("пауза") if self.paused else t("выберите источник") if self.unavailable else self.settings.hotkey.label
         self.tray.setToolTip(f"DekstopShot · {state}")
 
@@ -383,6 +385,7 @@ class Controller(QObject):
             self.error("Источник недоступен. Выберите монитор или открытое окно приложения.")
             return
         self.busy = True
+        self.save_current_capture = self.settings.save_screenshots
         self.restore_window = self.window.isVisible()
         self._update_state()
         self.window.hide()
@@ -413,17 +416,43 @@ class Controller(QObject):
         except (OSError, MemoryError) as error:
             self._capture_failed(str(error))
             return
-        text = f"Скопировано · {payload.width} × {payload.height} px · {datetime.now():%H:%M:%S} · Вставка: Ctrl + V"
-        self.window.show_message(text)
+        if self.save_current_capture:
+            self.save_payload = payload
+            self.job = PictureSaveJob(payload.png)
+            self.job.signals.succeeded.connect(self._picture_saved)
+            self.job.signals.failed.connect(self._picture_save_failed)
+            self.pool.start(self.job)
+        else:
+            self._show_copied(payload)
+
+    def _show_copied(self, payload: CapturePayload, *, saved=False):
+        source = ("Скопировано и сохранено · {width} × {height} px · {time} · Вставка: Ctrl + V" if saved else
+                  "Скопировано · {width} × {height} px · {time} · Вставка: Ctrl + V")
+        self.window.show_message(t(source, width=payload.width, height=payload.height,
+                                   time=datetime.now().strftime("%H:%M:%S")))
+        self._finish()
+
+    def _picture_saved(self, _path: Path):
+        if self.quitting or self.save_payload is None:
+            self._finish()
+            return
+        self._show_copied(self.save_payload, saved=True)
+
+    def _picture_save_failed(self, message: str):
+        if not self.quitting:
+            self.error(t("Снимок скопирован в буфер, но не удалось сохранить PNG: {error}", error=t(message)))
         self._finish()
 
     def _capture_failed(self, message: str):
-        self.error(message)
+        if not self.quitting:
+            self.error(message)
         self._finish()
 
     def _finish(self):
         self.busy = False
         self.job = None
+        self.save_payload = None
+        self.save_current_capture = False
         if self.quitting:
             self.app.quit()
             return

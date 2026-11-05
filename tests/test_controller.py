@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 from dataclasses import replace
 
@@ -127,6 +128,145 @@ def test_success_is_silent_even_with_notifications_enabled_in_old_settings(contr
     assert len(api.copies) == 1
     assert not controller.tray.messages
     assert "Скопировано" in controller.window.message.text()
+
+
+def test_tray_has_no_capture_command_in_either_language(controller):
+    controller, _api = controller
+    for language in ("ru", "en"):
+        controller.change_language(language)
+        texts = [action.text() for action in controller.menu.actions()]
+        assert not any("Сделать снимок" in text or "Take a screenshot" in text for text in texts)
+
+
+def test_disabled_picture_saving_never_resolves_the_system_picture_folder(controller, monkeypatch):
+    controller, api = controller
+
+    def forbidden():
+        pytest.fail("Disabled saving must not resolve or touch Pictures")
+
+    monkeypatch.setattr("dekstopshot.pictures.pictures_directory", forbidden)
+    controller.capture()
+    wait_for_capture(controller)
+    assert len(api.copies) == 1
+
+
+def test_picture_saving_is_persisted_and_saves_the_clipboard_png(controller, tmp_path, monkeypatch):
+    controller, api = controller
+    directory = tmp_path / "Pictures" / "DekstopShot"
+    monkeypatch.setattr("dekstopshot.pictures.pictures_directory", lambda: directory)
+    controller.change_option("save_screenshots", True)
+    assert controller.store.load().save_screenshots
+    assert controller.window.save_screenshots.isChecked()
+    controller.capture()
+    wait_for_capture(controller)
+    files = list(directory.glob("*.png"))
+    assert len(api.copies) == len(files) == 1
+    assert files[0].read_bytes() == api.copies[0][1]
+    assert "Скопировано и сохранено" in controller.window.message.text()
+    assert not controller.tray.messages
+
+
+def test_picture_save_failure_keeps_clipboard_and_explains_partial_success(controller, monkeypatch):
+    controller, api = controller
+    controller.change_option("save_screenshots", True)
+
+    def fail(_png):
+        raise PermissionError("access denied")
+
+    monkeypatch.setattr("dekstopshot.pictures.save_png", fail)
+    controller.capture()
+    wait_for_capture(controller)
+    assert len(api.copies) == 1 and api.copies[0][1].startswith(b"\x89PNG")
+    assert "скопирован в буфер" in controller.window.message.text()
+    assert "не удалось сохранить PNG" in controller.window.message.text()
+    assert len(controller.tray.messages) == 1
+
+
+@pytest.mark.parametrize("initial", [False, True])
+def test_picture_save_policy_is_fixed_for_the_capture_in_progress(controller, tmp_path, monkeypatch, initial):
+    controller, api = controller
+    directory = tmp_path / "Pictures" / "DekstopShot"
+    monkeypatch.setattr("dekstopshot.pictures.pictures_directory", lambda: directory)
+    controller.change_option("save_screenshots", initial)
+    controller.capture()
+    controller.change_option("save_screenshots", not initial)
+    wait_for_capture(controller)
+    assert len(api.copies) == 1
+    assert len(list(directory.glob("*.png"))) == int(initial)
+    assert controller.store.load().save_screenshots is not initial
+
+
+def test_failed_picture_option_save_restores_checkbox_and_policy(controller, monkeypatch):
+    controller, _api = controller
+
+    def fail(_settings):
+        raise OSError("settings are read-only")
+
+    monkeypatch.setattr(controller.store, "save", fail)
+    controller.window.save_screenshots.setChecked(True)
+    assert not controller.settings.save_screenshots
+    assert not controller.window.save_screenshots.isChecked()
+
+
+def test_failed_clipboard_copy_does_not_save_a_picture(controller, monkeypatch):
+    controller, api = controller
+    controller.change_option("save_screenshots", True)
+
+    def fail(*_):
+        raise OSError("clipboard failure")
+
+    def forbidden(_png):
+        pytest.fail("A failed clipboard capture must not save a picture")
+
+    monkeypatch.setattr(api, "write_clipboard", fail)
+    monkeypatch.setattr("dekstopshot.pictures.save_png", forbidden)
+    controller.capture()
+    wait_for_capture(controller)
+    assert not api.copies
+    assert "clipboard failure" in controller.window.message.text()
+
+
+def test_quitting_during_picture_save_finishes_without_restoring_ui(controller, tmp_path, monkeypatch):
+    controller, api = controller
+    controller.change_option("save_screenshots", True)
+    started, release = threading.Event(), threading.Event()
+    quit_calls = []
+
+    def delayed(_png):
+        started.set()
+        if not release.wait(2):
+            raise TimeoutError("test did not release writer")
+        return tmp_path / "saved.png"
+
+    monkeypatch.setattr("dekstopshot.pictures.save_png", delayed)
+    monkeypatch.setattr(controller.app, "quit", lambda: quit_calls.append(True))
+    controller.window.show()
+    controller.capture()
+    deadline = time.monotonic() + 2
+    while not started.is_set() and time.monotonic() < deadline:
+        QTest.qWait(20)
+    assert started.is_set()
+    controller.quit()
+    assert not quit_calls
+    release.set()
+    wait_for_capture(controller)
+    assert len(api.copies) == 1
+    assert quit_calls == [True]
+    assert not controller.window.isVisible()
+    assert not controller.hotkeys.registered
+    assert not controller.tray.messages
+
+
+def test_late_capture_failure_after_quit_does_not_show_a_notification(controller, monkeypatch):
+    controller, _api = controller
+    quit_calls = []
+    monkeypatch.setattr(controller.app, "quit", lambda: quit_calls.append(True))
+    controller.busy = True
+    controller.quit()
+    controller._capture_failed("late capture error")
+    assert quit_calls == [True]
+    assert not controller.tray.messages
+    assert not controller.window.isVisible()
 
 
 def test_application_mode_requires_explicit_window_selection(controller):

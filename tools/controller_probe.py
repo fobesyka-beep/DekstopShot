@@ -1,7 +1,7 @@
 """Opt-in live Controller probe using the synthetic windows_smoke --show-target fixture.
 
 Replaces the system clipboard only with the fixture's synthetic color pattern.
-Settings and JSON results are confined to the checkout's .validation directory.
+Settings, synthetic PNG copies and JSON results stay in the checkout's .validation directory.
 Does not synthesize physical input or operate any other application's UI.
 """
 
@@ -29,6 +29,7 @@ def main() -> int:
 
     from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
+    from dekstopshot import pictures
     from dekstopshot.app import Controller
     from dekstopshot.core import Settings, SettingsStore, WindowTarget
     from dekstopshot.native import WindowsAPI
@@ -157,6 +158,38 @@ def main() -> int:
         assert not controller.paused and controller.hotkeys.registered
         return {"pause_blocks_capture": True, "binding_released": True, "resume_registered": True}
 
+    def optional_png_saving():
+        from PySide6.QtGui import QImage
+
+        directory = ROOT / ".validation" / ("pictures-probe-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
+        system_resolver = pictures.pictures_directory
+        pictures.pictures_directory = lambda: directory
+        try:
+            controller.change_option("save_screenshots", False)
+            capture_fixture()
+            assert not directory.exists(), "Disabled saving touched the picture folder"
+            controller.change_option("save_screenshots", True)
+            capture_fixture()
+            saved = list(directory.glob("*.png"))
+            assert len(saved) == 1, "Enabled saving did not create one PNG"
+            file_image = QImage(str(saved[0]))
+            clipboard_image = app.clipboard().image()
+            assert file_image.size() == clipboard_image.size()
+            for xf, yf in ((.25, .25), (.75, .25), (.25, .75), (.75, .75)):
+                x, y = int(file_image.width() * xf), int(file_image.height() * yf)
+                assert file_image.pixelColor(x, y) == clipboard_image.pixelColor(x, y)
+            assert "сохранено" in controller.window.message.text()
+            controller.change_option("save_screenshots", False)
+            capture_fixture()
+            assert list(directory.glob("*.png")) == saved, "Disabled mode created another file"
+            return {"disabled_creates_no_directory": True, "enabled_creates_png": True,
+                    "file_clipboard_dimensions_and_colors_match": True,
+                    "disabling_keeps_existing_png_only": True,
+                    "only_synthetic_fixture_written": str(saved[0])}
+        finally:
+            pictures.pictures_directory = system_resolver
+            controller.change_option("save_screenshots", False)
+
     def close_to_tray():
         controller.window.close()
         pump()
@@ -203,6 +236,7 @@ def main() -> int:
             record("native_toolwindow_visibility_backdrop_api", native_window)
             if record("select_real_synthetic_fixture", select_fixture):
                 record("controller_capturejob_wgc_clipboard_restore", capture_fixture)
+                record("optional_png_saving_real_wgc_clipboard_disk", optional_png_saving)
             record("pause_releases_binding_resume_restores", pause_resume)
             record("close_to_tray_retains_hotkey_and_reopen", close_to_tray)
             record("language_and_hotkey_mode_switch", language_and_key_mode)

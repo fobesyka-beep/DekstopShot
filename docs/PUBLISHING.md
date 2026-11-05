@@ -4,7 +4,7 @@
 
 Все команды ниже выполняются в **PowerShell**. Исходники отправляются в Git, готовая программа — в **Releases** как ZIP всей папки. Ветки: `main` — стабильная версия, `develop` — разработка. Команды публикации выполняет владелец репозитория; подготовка этих файлов ничего на GitHub не отправляет.
 
-## Версия 1.1.0: обновление существующего репозитория
+## Версия 1.2.0: обновление существующего репозитория
 
 Репозиторий и ветки уже созданы. Для этого выпуска не выполняйте `git init` и `git remote add` повторно. Откройте **Terminal в PyCharm** и используйте PowerShell. Подготовленные изменения находятся в рабочей папке; команды публикации ещё предстоит выполнить владельцу.
 
@@ -16,7 +16,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Не удалось перейти в develop;
 git pull --ff-only origin develop
 if ($LASTEXITCODE -ne 0) { throw 'Сначала согласуйте локальную и удалённую ветку develop.' }
 git add .
-git commit -m 'feat: release 1.1 with RU/EN, update checks and shared hotkeys'
+git commit -m 'feat: release 1.2 with optional PNG saving and UI cleanup'
 if ($LASTEXITCODE -ne 0) { throw 'Коммит не создан; проверьте git status перед продолжением.' }
 git push -u origin develop
 if ($LASTEXITCODE -ne 0) { throw 'Не удалось отправить develop.' }
@@ -25,20 +25,20 @@ git switch main
 if ($LASTEXITCODE -ne 0) { throw 'Не удалось перейти в main; проверьте git status.' }
 git pull --ff-only origin main
 if ($LASTEXITCODE -ne 0) { throw 'Сначала согласуйте локальную и удалённую ветку main.' }
-git merge --no-ff develop -m 'Release DekstopShot 1.1.0'
+git merge --no-ff develop -m 'Release DekstopShot 1.2.0'
 if ($LASTEXITCODE -ne 0) { throw 'Разрешите конфликты слияния перед отправкой main.' }
 git push origin main
 if ($LASTEXITCODE -ne 0) { throw 'Не удалось отправить main.' }
-git tag -a v1.1.0 -m 'DekstopShot 1.1.0'
+git tag -a v1.2.0 -m 'DekstopShot 1.2.0'
 if ($LASTEXITCODE -ne 0) { throw 'Проверьте существующий тег; опубликованные теги не передвигайте.' }
-git push origin v1.1.0
+git push origin v1.2.0
 ```
 
-После отправки тега откройте [Actions](https://github.com/fobesyka-beep/DekstopShot/actions) и дождитесь успешных заданий `build` и `release` для **v1.1.0**. Workflow опубликует ZIP и контрольную сумму в [Releases](https://github.com/fobesyka-beep/DekstopShot/releases). Описание выпуска берётся из [docs/releases/v1.1.0.md](releases/v1.1.0.md): это список конкретных изменений и ссылка Full Changelog.
+После отправки тега откройте [Actions](https://github.com/fobesyka-beep/DekstopShot/actions) и дождитесь успешных заданий `build` и `release` для **v1.2.0**. Workflow опубликует ZIP и контрольную сумму в [Releases](https://github.com/fobesyka-beep/DekstopShot/releases). Описание выпуска берётся из [docs/releases/v1.2.0.md](releases/v1.2.0.md): это список конкретных изменений и ссылка Full Changelog.
 
 Если защита `main` требует pull request, после push в develop создайте PR `develop → main`, дождитесь слияния, затем обновите локальный main через `git pull --ff-only origin main` и выполните только команды нового тега. Не отключайте защиту ветки ради этих команд.
 
-Остальные разделы ниже — справка по **первоначальному созданию** репозитория и общим операциям. Для уже подготовленного выпуска 1.1 достаточно блока выше.
+Остальные разделы ниже — справка по **первоначальному созданию** репозитория и общим операциям. Для уже подготовленного выпуска 1.2 достаточно блока выше.
 
 ## 1. GitHub CLI и вход
 
