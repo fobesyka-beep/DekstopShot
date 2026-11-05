@@ -3,6 +3,7 @@
 Run via python main.py --self-test [--clipboard] or the built exe --self-test.
 The optional clipboard check replaces the clipboard with a synthetic 2x2 image.
 Desktop/window captures stay in memory; the JSON report contains no image data.
+The PNG-file check uses only a synthetic pattern in a temporary directory.
 This does not test physical keyboard input, external application paste, or the Controller GUI.
 """
 
@@ -14,6 +15,7 @@ import json
 import os
 import platform
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes as W
@@ -37,12 +39,13 @@ def main(argv=None) -> int:
     # This is a live Windows diagnostic even when pytest/offscreen was used earlier.
     os.environ["QT_QPA_PLATFORM"] = "windows"
     from PySide6.QtCore import QCoreApplication, QEvent, Qt
-    from PySide6.QtGui import QColor, QPainter
+    from PySide6.QtGui import QColor, QImage, QPainter
     from PySide6.QtWidgets import QApplication, QWidget
 
     from .capture import capture_window, encode_frame
     from .core import Frame, Hotkey, WindowTarget
     from .native import WindowsAPI
+    from .pictures import pictures_directory, save_png
 
     api = WindowsAPI()
     api.enable_dpi()
@@ -255,6 +258,27 @@ def main(argv=None) -> int:
             return {"rejected": True, "message": str(error)}
         raise AssertionError("Destroyed target passed validation")
 
+    def png_file_roundtrip():
+        # Only a synthetic 2x2 pattern is written, in a temporary diagnostic
+        # directory. Resolving Pictures does not create or alter that folder.
+        destination = pictures_directory()
+        assert destination.is_absolute() and destination.name == "DekstopShot"
+        synthetic = Frame(2, 2, bytes((0, 0, 255, 0, 0, 255, 0, 0,
+                                       255, 0, 0, 0, 0, 255, 255, 0)))
+        png = encode_frame(synthetic).png
+        with tempfile.TemporaryDirectory(prefix="DekstopShot-png-") as temporary:
+            directory = Path(temporary) / "Изображения" / "DekstopShot"
+            stamp = datetime.now()
+            first = save_png(png, directory=directory, captured_at=stamp)
+            second = save_png(png, directory=directory, captured_at=stamp)
+            assert first != second and first.read_bytes() == second.read_bytes() == png
+            image = QImage(str(first))
+            assert image.width() == image.height() == 2
+            assert image.pixelColor(0, 0).red() == 255 and image.pixelColor(0, 1).blue() == 255
+        return {"system_pictures_resolved": str(destination), "system_pictures_written": False,
+                "synthetic_png_bytes_exact": True, "same_timestamp_no_overwrite": True,
+                "unicode_path_roundtrip": True, "temporary_files_removed": True}
+
     try:
         record("gdi_monitors", gdi)
         record("hotkey_registration_conflict_release", hotkeys)
@@ -267,6 +291,7 @@ def main(argv=None) -> int:
             results.append({"name": "clipboard_synthetic_dib_png_readback", "status": "skipped",
                             "detail": "Add --clipboard to replace the clipboard with the synthetic test image"})
         record("closed_target_rejected", closed)
+        record("optional_png_file_roundtrip", png_file_roundtrip)
     finally:
         cover.close()
         try:

@@ -103,6 +103,7 @@ class Settings:
     version: int = 1
     language: str = field(default_factory=_system_language)
     hotkey_passthrough: bool = True
+    save_screenshots: bool = False
 
     @classmethod
     def from_dict(cls, data: dict) -> Settings:
@@ -117,6 +118,7 @@ class Settings:
         mode = data.get("capture_mode", "monitor")
         language = data.get("language", _system_language())
         passthrough = data.get("hotkey_passthrough", True)
+        save_screenshots = data.get("save_screenshots", False)
         if not isinstance(monitor_id, str) or len(monitor_id) > 4096:
             raise ValueError("Некорректный идентификатор монитора.")
         if type(notifications) is not bool or type(hidden) is not bool:
@@ -127,10 +129,13 @@ class Settings:
             raise ValueError("Неизвестный язык интерфейса.")
         if type(passthrough) is not bool:
             raise ValueError("Некорректный режим горячей клавиши.")
+        if type(save_screenshots) is not bool:
+            raise ValueError("Некорректный режим сохранения снимков.")
         return cls(hotkey=Hotkey(key.get("vk", 0xBD), key.get("modifiers", 0)),
                    monitor_id=monitor_id, notifications=notifications,
                    start_hidden=hidden, capture_mode=mode,
-                   language=language, hotkey_passthrough=passthrough)
+                   language=language, hotkey_passthrough=passthrough,
+                   save_screenshots=save_screenshots)
 
 
 class SettingsStore:

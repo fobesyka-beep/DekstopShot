@@ -634,15 +634,10 @@ class LinkButton(GlassButton):
         p.restore()
         p.setFont(font(14, QFont.Weight.DemiBold))
         p.setPen(QColor(INK))
-        p.drawText(QRectF(62, 13, self.width() - 82, 24), Qt.AlignmentFlag.AlignVCenter, self.title)
+        p.drawText(QRectF(62, 13, self.width() - 72, 24), Qt.AlignmentFlag.AlignVCenter, self.title)
         p.setFont(font(10))
         p.setPen(QColor(MUTED))
         p.drawText(QRectF(62, 37, self.width() - 72, 19), Qt.AlignmentFlag.AlignVCenter, t(self.subtitle))
-        p.save()
-        p.translate(self.width() - 23, 12)
-        p.scale(.7, .7)
-        draw_icon(p, "external", QColor("#859cae"))
-        p.restore()
 
 
 class QuickLinks(QWidget):
@@ -701,6 +696,8 @@ class GlassComboBox(QComboBox):
 class MainWindow(QWidget):
     DEFAULT_SIZE = (940, 620)
     MINIMUM_SIZE = (800, 520)
+    READY_CLIPBOARD = "Готово к работе. Снимок — в буфере обмена."
+    READY_SAVING = "Готово к работе. Снимок — в буфер и папку «Изображения»."
 
     surface_shown = Signal()
     capture_requested = Signal()
@@ -747,10 +744,10 @@ class MainWindow(QWidget):
         logo_row.addStretch()
         side.addLayout(logo_row)
         side.addSpacing(3)
-        tagline = label("СНИМОК В БУФЕР", "eyebrow")
+        tagline = label("СНИМОК В БУФЕР ОБМЕНА", "eyebrow")
         tagline.setStyleSheet("font-size: 9px; letter-spacing: 1px; color: #c3deeb;")
         side.addWidget(tagline)
-        side.addSpacing(23)
+        side.addSpacing(18)
         help_button = button("  Инструкция", "help", "nav")
         help_button.clicked.connect(self.help_requested)
         side.addWidget(help_button)
@@ -759,14 +756,16 @@ class MainWindow(QWidget):
         status_layout = QVBoxLayout(status)
         status_layout.setContentsMargins(12, 14, 12, 12)
         status_layout.setSpacing(8)
-        status_layout.addWidget(label("ОБЩЕЕ", "eyebrow"))
-        status_layout.addWidget(label("Язык", "muted"))
+        general_heading = label("ОБЩЕЕ", "eyebrow")
+        general_heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        status_layout.addWidget(general_heading)
         self.language_combo = GlassComboBox()
         self.language_combo.setMinimumContentsLength(5)
         self.language_combo.addItem("Русский", "ru")
         self.language_combo.addItem("English", "en")
         self.language_combo.setCurrentIndex(self.language_combo.findData(get_language()))
         translated(self.language_combo, "Язык", "setAccessibleName")
+        translated(self.language_combo, "Язык", "setToolTip")
         self.language_combo.activated.connect(
             lambda index: self.language_requested.emit(self.language_combo.itemData(index)))
         status_layout.addWidget(self.language_combo)
@@ -893,7 +892,8 @@ class MainWindow(QWidget):
         self.hotkey_passthrough.toggled.connect(
             lambda value: self.settings_requested.emit("hotkey_passthrough", value))
         key_layout.addWidget(self.hotkey_passthrough)
-        self.capture_status = label("Готово к работе. Скриншоты не сохраняются в файлы.", "muted", True)
+        self.capture_status = label(self.READY_SAVING if getattr(settings, "save_screenshots", False)
+                                    else self.READY_CLIPBOARD, "muted", True)
         self.capture_status.setMinimumHeight(42)
         self.capture_status.setStyleSheet("font-size: 10px; color: #c3dbe7; padding: 2px 0;")
         self.message = self.capture_status
@@ -913,6 +913,13 @@ class MainWindow(QWidget):
         self.start_hidden.setChecked(settings.start_hidden)
         self.start_hidden.toggled.connect(lambda value: self.settings_requested.emit("start_hidden", value))
         options.addWidget(self.start_hidden)
+        self.save_screenshots = translated(QCheckBox(), "Сохранять в «Изображения»")
+        translated(self.save_screenshots,
+                   "Сохранять PNG в подпапке DekstopShot системной папки «Изображения».", "setToolTip")
+        self.save_screenshots.setChecked(getattr(settings, "save_screenshots", False))
+        self.save_screenshots.toggled.connect(
+            lambda value: self.settings_requested.emit("save_screenshots", value))
+        options.addWidget(self.save_screenshots)
         options.addStretch()
         main.addLayout(options)
         main.addStretch()
@@ -929,11 +936,23 @@ class MainWindow(QWidget):
         self.mode_combo.setItemText(0, t("Весь выбранный монитор"))
         self.mode_combo.setItemText(1, t("Окно приложения"))
         self.language_combo.setCurrentIndex(self.language_combo.findData(settings.language))
-        self.hotkey_passthrough.blockSignals(True)
-        self.hotkey_passthrough.setChecked(settings.hotkey_passthrough)
-        self.hotkey_passthrough.blockSignals(False)
+        self.sync_settings(settings)
         self.update_mode(settings.capture_mode)
         self.update_hotkey(settings.hotkey)
+
+    def sync_settings(self, settings: Settings):
+        for widget, value in ((self.start_hidden, settings.start_hidden),
+                              (self.hotkey_passthrough, settings.hotkey_passthrough),
+                              (self.save_screenshots, getattr(settings, "save_screenshots", False))):
+            previous = widget.blockSignals(True)
+            widget.setChecked(value)
+            widget.blockSignals(previous)
+        self.set_saving_status(getattr(settings, "save_screenshots", False))
+
+    def set_saving_status(self, enabled: bool):
+        source, _ = getattr(self.capture_status, "_translation_specs", {}).get("setText", ("", {}))
+        if source in (self.READY_CLIPBOARD, self.READY_SAVING):
+            translated(self.capture_status, self.READY_SAVING if enabled else self.READY_CLIPBOARD)
 
     def update_available(self, version: str, url: str):
         self._update_url = url
