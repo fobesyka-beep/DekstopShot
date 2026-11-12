@@ -22,6 +22,11 @@ class QuietTray(QObject):
     def __init__(self, *_):
         super().__init__()
         self.messages = []
+        self.visible = False
+
+    @staticmethod
+    def isSystemTrayAvailable():
+        return True
 
     def setContextMenu(self, _):
         pass
@@ -29,11 +34,14 @@ class QuietTray(QObject):
     def setToolTip(self, _):
         pass
 
-    def show(self):
-        pass
+    def setVisible(self, visible):
+        self.visible = visible
+
+    def isVisible(self):
+        return self.visible
 
     def hide(self):
-        pass
+        self.setVisible(False)
 
     def showMessage(self, *args):
         self.messages.append(args)
@@ -77,7 +85,7 @@ def controller(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr("dekstopshot.app.QSystemTrayIcon", QuietTray)
     SettingsStore().save(Settings(monitor_id="main", start_hidden=True, language="ru", hotkey_passthrough=False))
     api = FakeDesktop()
-    controller = Controller(qapp, api, check_updates=False)
+    controller = Controller(qapp, api, check_updates=False, can_reopen=True)
     yield controller, api
     controller.hotkeys.close()
     controller.window.hide()
@@ -136,6 +144,39 @@ def test_tray_has_no_capture_command_in_either_language(controller):
         controller.change_language(language)
         texts = [action.text() for action in controller.menu.actions()]
         assert not any("Сделать снимок" in text or "Take a screenshot" in text for text in texts)
+
+
+def test_hidden_without_tray_still_captures_and_can_be_reopened(controller):
+    controller, api = controller
+    assert controller.tray.isVisible()
+    controller.show_window()
+    controller.window.hide_tray_icon.setChecked(True)
+    assert controller.store.load().hide_tray_icon
+    assert controller.tray.isVisible()
+    assert controller.window.quit_button.isVisible()
+
+    controller.window.close()
+    assert not controller.window.isVisible() and not controller.tray.isVisible()
+    assert controller.hotkeys.registered
+    controller.capture()
+    wait_for_capture(controller)
+    assert len(api.copies) == 1
+    assert not controller.window.isVisible() and not controller.tray.isVisible()
+
+    controller.show_window()
+    assert controller.window.isVisible() and controller.tray.isVisible()
+    controller.window.hide_tray_icon.setChecked(False)
+    controller.window.close()
+    assert controller.tray.isVisible()
+
+
+def test_background_option_requires_working_reopen_channel(controller):
+    controller, _api = controller
+    controller.can_reopen = False
+    controller.window.hide_tray_icon.setChecked(True)
+    assert not controller.window.hide_tray_icon.isChecked()
+    assert not controller.store.load().hide_tray_icon
+    assert controller.tray.isVisible()
 
 
 def test_disabled_picture_saving_never_resolves_the_system_picture_folder(controller, monkeypatch):

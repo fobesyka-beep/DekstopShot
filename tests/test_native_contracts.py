@@ -158,26 +158,33 @@ def test_capture_uses_physical_negative_coordinates_and_always_frees_gdi(monkeyp
     assert released == [(None, 101)]
 
 
-@pytest.mark.parametrize("build,legacy_available,expected", [
-    (22621, False, True), (19045, True, True), (19045, False, False),
+@pytest.mark.parametrize("build,failed_attribute,expected", [
+    (22621, None, True), (19045, None, False), (22621, 33, False), (22621, 38, False),
 ])
-def test_desktop_blur_uses_supported_or_optional_compositor_without_startup_dependency(
-        monkeypatch, build, legacy_available, expected):
-    from dekstopshot.native import ACCENT_POLICY
-
+def test_desktop_blur_requires_supported_acrylic_and_one_rounded_edge(
+        monkeypatch, build, failed_attribute, expected):
     monkeypatch.setattr("dekstopshot.native.sys.getwindowsversion",
                         lambda: SimpleNamespace(build=build), raising=False)
     api = object.__new__(WindowsAPI)
-    api.user = SimpleNamespace()
-    api.dwm = SimpleNamespace(DwmExtendFrameIntoClientArea=lambda *_: 0,
-                              DwmSetWindowAttribute=lambda *_: 0)
-    if legacy_available:
-        def compose(_hwnd, data):
-            assert data._obj.attribute == 19
-            assert data._obj.size == 16
-            policy = C.cast(data._obj.data, C.POINTER(ACCENT_POLICY)).contents
-            assert policy.AccentState == 4
-            assert policy.GradientColor >> 24 < 160  # Translucent tint, not an opaque fill.
-            return True
-        api.user.SetWindowCompositionAttribute = compose
+    settings = []
+    frames = []
+
+    def set_attribute(_hwnd, attribute, data, size):
+        assert size == 4
+        settings.append((attribute, data._obj.value))
+        return -1 if attribute == failed_attribute else 0
+
+    def extend_frame(_hwnd, margins):
+        frames.append((margins._obj.left, margins._obj.right, margins._obj.top, margins._obj.bottom))
+        return 0
+
+    api.dwm = SimpleNamespace(DwmSetWindowAttribute=set_attribute, DwmExtendFrameIntoClientArea=extend_frame)
     assert api.apply_backdrop(123) is expected
+    if expected:
+        assert settings == [(20, 1), (33, 2), (38, 3), (34, 0xFFFFFFFE)]
+        assert frames == [(-1, -1, -1, -1)]
+    elif build < 22621:
+        assert settings == frames == []
+    else:
+        assert settings[-1] == (38, 1)
+        assert frames[-1] == (0, 0, 0, 0)

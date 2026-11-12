@@ -153,13 +153,14 @@ def main(argv=None) -> int:
                 "physical_key_delivery_tested": False}
 
     def mutex():
-        first = api.acquire_instance()
-        assert first, "DekstopShot is already running; close it before the mutex diagnostic"
+        name = f"Local\\DekstopShot.Diagnostics.{os.getpid()}"
+        first = api.acquire_instance(name)
+        assert first, "Could not acquire the isolated diagnostic mutex"
         try:
-            assert api.acquire_instance() is None, "Second acquisition was not rejected"
+            assert api.acquire_instance(name) is None, "Second acquisition was not rejected"
         finally:
             api.kernel.CloseHandle(first)
-        again = api.acquire_instance()
+        again = api.acquire_instance(name)
         assert again, "Mutex was not released"
         api.kernel.CloseHandle(again)
         return {"duplicate_rejected": True, "released": True}

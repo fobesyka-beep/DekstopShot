@@ -68,7 +68,8 @@ QComboBox QAbstractItemView { background: #355365; color: #f3f7ff; padding: 6px;
 QCheckBox { color: #d0e0eb; spacing: 8px; background: transparent; font-size: 11px; }
 QCheckBox::indicator { width: 14px; height: 14px; border-radius: 7px;
     border: 1px solid #9ac7db; background: rgba(132,198,228,12); }
-QCheckBox::indicator:checked { background: #c6eeff; border: 3px solid #659eb7; }
+QCheckBox::indicator:checked { border-color: #c2e8f7;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #b0d8e9, stop:1 #6b9db5); }
 QCheckBox::indicator:focus { border-color: white; }
 QScrollArea { border: 0; background: transparent; }
 QScrollArea > QWidget > QWidget { background: transparent; }
@@ -76,10 +77,11 @@ QScrollBar:vertical { width: 6px; background: transparent; margin: 4px 0; }
 QScrollBar::handle:vertical { background: rgba(180,210,230,65); border-radius: 3px; min-height: 28px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
-QMenu { color: #edf8ff; background: #314d60; border: 1px solid #81b8d3; padding: 6px; }
-QMenu::item { padding: 9px 24px; border-radius: 6px; }
-QMenu::item:selected { background: #517d96; }
-QMenu::separator { height: 1px; background: #3c4b60; margin: 5px; }
+QMenu { color: #edf8ff; background: #263d4d; border: 1px solid #668ba0; padding: 7px; }
+QMenu::item { padding: 7px 16px 7px 27px; margin: 2px 0;
+    border: 1px solid #466477; border-radius: 8px; background: #304b5c; }
+QMenu::item:selected { border-color: #89b5cc; background: #466d83; }
+QMenu::separator { height: 1px; background: #486272; margin: 5px 8px; }
 QToolTip { color: #f3f7ff; background: #24364a; border: 1px solid #4b6278; padding: 7px; }
 """
 
@@ -454,13 +456,27 @@ class GlassKeyLabel(QLabel):
 
 
 GLASS_RADIUS = 24
+NATIVE_GLASS_RADIUS = 8  # Physical pixels in the Desktop Acrylic corner.
+
+
+def glass_corner_radius(widget):
+    if widget.backdrop and widget.isWindow():
+        return NATIVE_GLASS_RADIUS / widget.devicePixelRatioF()
+    return GLASS_RADIUS
+
+
+def set_window_backdrop(widget, enabled):
+    widget.backdrop = enabled
+    update_glass_mask(widget)
+    widget.update()
 
 
 def update_glass_mask(widget):
-    """Clip the native backdrop too: transparent paint alone leaves DWM corners square."""
+    """Keep the window's input region aligned with its painted edge."""
     if widget.isWindow():
+        radius = glass_corner_radius(widget)
         path = QPainterPath()
-        path.addRoundedRect(QRectF(widget.rect()), GLASS_RADIUS, GLASS_RADIUS)
+        path.addRoundedRect(QRectF(widget.rect()), radius, radius)
         widget.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
 
@@ -468,8 +484,9 @@ def paint_window_glass(widget):
     p = QPainter(widget)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     rect = QRectF(widget.rect()).adjusted(.7, .7, -.7, -.7)
+    radius = max(0., glass_corner_radius(widget) - .7)
     path = QPainterPath()
-    path.addRoundedRect(rect, GLASS_RADIUS, GLASS_RADIUS)
+    path.addRoundedRect(rect, radius, radius)
     p.setClipPath(path)
     gradient = QLinearGradient(0, 0, widget.width(), widget.height())
     # The compositor supplies the blur; this layer only adds a translucent tint.
@@ -478,12 +495,12 @@ def paint_window_glass(widget):
     gradient.setColorAt(.48, QColor(39, 58, 73, alpha))
     gradient.setColorAt(1, QColor(24, 36, 48, alpha))
     p.fillPath(path, gradient)
-    for center, radius, color in (
+    for center, glow_radius, color in (
         (QPointF(widget.width() * .78, 20), 480, QColor(107, 189, 228, 17)),
         (QPointF(widget.width() * .42, widget.height()), 420, QColor(141, 170, 193, 9)),
         (QPointF(-25, 50), 310, QColor(145, 209, 241, 14)),
     ):
-        glow = QRadialGradient(center, radius)
+        glow = QRadialGradient(center, glow_radius)
         glow.setColorAt(0, color)
         glow.setColorAt(1, QColor(0, 0, 0, 0))
         p.fillPath(path, glow)
@@ -495,10 +512,11 @@ def paint_window_glass(widget):
     edge.setColorAt(1, QColor(219, 247, 255, 126))
     p.setPen(QPen(QBrush(edge), 1))
     p.setBrush(Qt.BrushStyle.NoBrush)
-    p.drawRoundedRect(rect, GLASS_RADIUS, GLASS_RADIUS)
+    p.drawRoundedRect(rect, radius, radius)
     inset = rect.adjusted(1.6, 1.6, -1.6, -1.6)
     p.setPen(QPen(QColor(235, 250, 255, 20), .7))
-    p.drawRoundedRect(inset, GLASS_RADIUS - 1.6, GLASS_RADIUS - 1.6)
+    inner_radius = max(0., radius - 1.6)
+    p.drawRoundedRect(inset, inner_radius, inner_radius)
     p.end()
 
 
@@ -513,6 +531,12 @@ class GlassDialog(QDialog):
 
     def paintEvent(self, event):
         paint_window_glass(self)
+
+    def event(self, event):
+        handled = super().event(event)
+        if event.type() == QEvent.Type.DevicePixelRatioChange:
+            update_glass_mask(self)
+        return handled
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -555,39 +579,84 @@ class GlassPanel(QWidget):
 
 class DisplayMap(QWidget):
     selected = Signal(str)
+    _MIN_HEIGHT = 108
+    _GRID_MARGIN = 12
+    _GRID_GAP = 8
+    _GRID_CELL_WIDTH = 48
+    _GRID_CELL_HEIGHT = 36
 
     def __init__(self):
         super().__init__()
         self.monitors: list[Monitor] = []
         self.selected_id = ""
-        self.hitboxes: list[tuple[QRectF, Monitor]] = []
-        self.setMinimumHeight(108)
+        self.setMinimumHeight(self._MIN_HEIGHT)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         translated(self, "Расположение мониторов; выбор также доступен в списке ниже", "setAccessibleName")
 
     def set_monitors(self, monitors, selected_id):
         self.monitors, self.selected_id = monitors, selected_id
+        self._fit_grid_height()
         self.update()
 
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.hitboxes.clear()
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_grid_height()
+
+    def _grid_columns(self):
+        available = self.width() - 2 * self._GRID_MARGIN + self._GRID_GAP
+        return max(1, available // (self._GRID_CELL_WIDTH + self._GRID_GAP))
+
+    def _fit_grid_height(self):
+        rows = math.ceil(len(self.monitors) / self._grid_columns())
+        grid_height = 2 * self._GRID_MARGIN + rows * (self._GRID_CELL_HEIGHT + self._GRID_GAP) - self._GRID_GAP
+        minimum = max(self._MIN_HEIGHT, grid_height)
+        if self.minimumHeight() != minimum:
+            self.setMinimumHeight(minimum)
+
+    def _grid_rects(self) -> list[QRectF]:
+        columns = min(len(self.monitors), self._grid_columns())
+        rows = math.ceil(len(self.monitors) / columns)
+        gap = self._GRID_GAP
+        width = max(1.0, (self.width() - 2 * self._GRID_MARGIN - (columns - 1) * gap) / columns)
+        width = min(120.0, width)
+        height = self._GRID_CELL_HEIGHT
+        y = (self.height() - rows * height - (rows - 1) * gap) / 2
+        rects = []
+        for first in range(0, len(self.monitors), columns):
+            count = min(columns, len(self.monitors) - first)
+            x = (self.width() - count * width - (count - 1) * gap) / 2
+            rects.extend(QRectF(x + column * (width + gap), y, width, height) for column in range(count))
+            y += height + gap
+        return rects
+
+    def _display_rects(self) -> tuple[list[QRectF], bool]:
         if not self.monitors:
-            p.setPen(QColor(MUTED))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, t("Мониторы не найдены"))
-            return
+            return [], False
         left = min(m.left for m in self.monitors)
         top = min(m.top for m in self.monitors)
         right = max(m.left + m.width for m in self.monitors)
         bottom = max(m.top + m.height for m in self.monitors)
-        scale = min((self.width() - 36) / (right - left), (self.height() - 30) / (bottom - top))
+        scale = min((self.width() - 36) / max(1, right - left), (self.height() - 30) / max(1, bottom - top))
         x0 = (self.width() - (right - left) * scale) / 2
         y0 = (self.height() - (bottom - top) * scale) / 2 - 3
-        for index, m in enumerate(self.monitors, 1):
-            r = QRectF(x0 + (m.left - left) * scale + 3, y0 + (m.top - top) * scale + 3,
-                       max(12, m.width * scale - 6), max(12, m.height * scale - 6))
-            selected = m.id == self.selected_id
+        rects = [QRectF(x0 + (m.left - left) * scale + 3, y0 + (m.top - top) * scale + 3,
+                        m.width * scale - 6, m.height * scale - 6) for m in self.monitors]
+        for index, rect in enumerate(rects):
+            if rect.width() < 36 or rect.height() < 28 or any(rect.intersects(other) for other in rects[:index]):
+                return self._grid_rects(), True
+        return rects, False
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rects, compact = self._display_rects()
+        self.setToolTip(t("Компактная схема. Номера совпадают со списком мониторов.") if compact else "")
+        if not rects:
+            p.setPen(QColor(MUTED))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, t("Мониторы не найдены"))
+            return
+        for index, (r, monitor) in enumerate(zip(rects, self.monitors), 1):
+            selected = monitor.id == self.selected_id
             gradient = QLinearGradient(r.topLeft(), r.bottomRight())
             gradient.setColorAt(0, QColor(139, 211, 249, 43 if selected else 13))
             gradient.setColorAt(1, QColor(45, 87, 116, 28 if selected else 13))
@@ -598,14 +667,15 @@ class DisplayMap(QWidget):
             p.setPen(QColor("#f0fbff" if selected else "#bed7e3"))
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, str(index))
             p.setPen(QPen(QColor("#afdff4" if selected else "#8aabba"), 2))
-            if r.height() > 28:
+            stand = QRectF(r.center().x() - 13, r.bottom() + 1, 26, 7)
+            if not compact and r.height() > 28 and not any(stand.intersects(other) for other in rects):
                 p.drawLine(QPointF(r.center().x(), r.bottom() + 2), QPointF(r.center().x(), r.bottom() + 7))
                 p.drawLine(QPointF(r.center().x() - 12, r.bottom() + 7), QPointF(r.center().x() + 12, r.bottom() + 7))
-            self.hitboxes.append((r, m))
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            for rect, monitor in self.hitboxes:
+            rects, _ = self._display_rects()
+            for rect, monitor in zip(rects, self.monitors):
                 if rect.contains(event.position()):
                     self.selected.emit(monitor.id)
                     break
@@ -696,10 +766,13 @@ class GlassComboBox(QComboBox):
 class MainWindow(QWidget):
     DEFAULT_SIZE = (940, 620)
     MINIMUM_SIZE = (800, 520)
-    READY_CLIPBOARD = "Готово к работе. Снимок — в буфере обмена."
-    READY_SAVING = "Готово к работе. Снимок — в буфер и папку «Изображения»."
+    READY_CLIPBOARD = "Готово к работе. Снимок идёт в буфер обмена."
+    READY_SAVING = "Готово к работе. Снимок идёт в буфер и сохраняется в «Изображения»."
+    BACKGROUND_HINT = ("Когда окно скрыто, DekstopShot продолжает делать снимки по горячей клавише. "
+                       "Значок в трее скрывается. Запустите DekstopShot ещё раз, чтобы открыть окно.")
 
     surface_shown = Signal()
+    surface_hidden = Signal()
     capture_requested = Signal()
     monitor_requested = Signal(str)
     window_requested = Signal(object)
@@ -707,6 +780,7 @@ class MainWindow(QWidget):
     refresh_requested = Signal()
     hotkey_requested = Signal()
     pause_requested = Signal()
+    quit_requested = Signal()
     settings_requested = Signal(str, bool)
     open_link = Signal(str)
     help_requested = Signal()
@@ -747,7 +821,7 @@ class MainWindow(QWidget):
         tagline = label("СНИМОК В БУФЕР ОБМЕНА", "eyebrow")
         tagline.setStyleSheet("font-size: 9px; letter-spacing: 1px; color: #c3deeb;")
         side.addWidget(tagline)
-        side.addSpacing(18)
+        side.addSpacing(5)
         help_button = button("  Инструкция", "help", "nav")
         help_button.clicked.connect(self.help_requested)
         side.addWidget(help_button)
@@ -772,9 +846,13 @@ class MainWindow(QWidget):
         self.pause_button = button("  Пауза", "pause", "nav")
         self.pause_button.clicked.connect(self.pause_requested)
         status_layout.addWidget(self.pause_button)
-        hide_button = button("  Скрыть в трей", role="nav")
+        hide_button = button("Скрыть окно", role="nav")
         hide_button.clicked.connect(self.close)
         status_layout.addWidget(hide_button)
+        self.quit_button = button("Выйти", role="nav")
+        self.quit_button.clicked.connect(self.quit_requested)
+        self.quit_button.setVisible(getattr(settings, "hide_tray_icon", False))
+        status_layout.addWidget(self.quit_button)
         self.update_button = button("")
         self.update_button.setStyleSheet("font-size: 11px;")
         self.update_button.clicked.connect(lambda: self.open_link.emit(self._update_url) if self._update_url else None)
@@ -804,8 +882,8 @@ class MainWindow(QWidget):
         header_layout.addStretch()
         close = button("", "close", "icon")
         close.setFixedSize(28, 28)
-        translated(close, "Скрыть в трей; DekstopShot продолжит работать", "setToolTip")
-        translated(close, "Скрыть в трей", "setAccessibleName")
+        translated(close, "Скрыть окно. DekstopShot продолжит работать в фоне.", "setToolTip")
+        translated(close, "Скрыть окно", "setAccessibleName")
         close.clicked.connect(self.close)
         header_layout.addWidget(close)
         main.addWidget(header)
@@ -909,7 +987,7 @@ class MainWindow(QWidget):
         self.quick_links.open_link.connect(self.open_link)
         main.addWidget(self.quick_links)
         options = QHBoxLayout()
-        self.start_hidden = translated(QCheckBox(), "При запуске — сразу в трей")
+        self.start_hidden = translated(QCheckBox(), "При запуске скрывать окно")
         self.start_hidden.setChecked(settings.start_hidden)
         self.start_hidden.toggled.connect(lambda value: self.settings_requested.emit("start_hidden", value))
         options.addWidget(self.start_hidden)
@@ -922,6 +1000,11 @@ class MainWindow(QWidget):
         options.addWidget(self.save_screenshots)
         options.addStretch()
         main.addLayout(options)
+        self.hide_tray_icon = translated(QCheckBox(), "Работать без значка в трее")
+        translated(self.hide_tray_icon, self.BACKGROUND_HINT, "setToolTip")
+        self.hide_tray_icon.setChecked(getattr(settings, "hide_tray_icon", False))
+        self.hide_tray_icon.toggled.connect(lambda value: self.settings_requested.emit("hide_tray_icon", value))
+        main.addWidget(self.hide_tray_icon, alignment=Qt.AlignmentFlag.AlignLeft)
         main.addStretch()
         scroll.setWidget(content)
         root.addWidget(scroll, 1)
@@ -943,10 +1026,12 @@ class MainWindow(QWidget):
     def sync_settings(self, settings: Settings):
         for widget, value in ((self.start_hidden, settings.start_hidden),
                               (self.hotkey_passthrough, settings.hotkey_passthrough),
-                              (self.save_screenshots, getattr(settings, "save_screenshots", False))):
+                              (self.save_screenshots, getattr(settings, "save_screenshots", False)),
+                              (self.hide_tray_icon, getattr(settings, "hide_tray_icon", False))):
             previous = widget.blockSignals(True)
             widget.setChecked(value)
             widget.blockSignals(previous)
+        self.quit_button.setVisible(self.hide_tray_icon.isChecked())
         self.set_saving_status(getattr(settings, "save_screenshots", False))
 
     def set_saving_status(self, enabled: bool):
@@ -1029,6 +1114,12 @@ class MainWindow(QWidget):
     def paintEvent(self, event):
         paint_window_glass(self)
 
+    def event(self, event):
+        handled = super().event(event)
+        if event.type() == QEvent.Type.DevicePixelRatioChange:
+            update_glass_mask(self)
+        return handled
+
     def closeEvent(self, event):
         self.hide()
         event.ignore()
@@ -1037,6 +1128,10 @@ class MainWindow(QWidget):
         super().showEvent(event)
         update_glass_mask(self)
         self.surface_shown.emit()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.surface_hidden.emit()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

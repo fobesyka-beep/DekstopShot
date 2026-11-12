@@ -1,8 +1,9 @@
-from PySide6.QtCore import QEvent, QPoint, Qt
+from PySide6.QtCore import QEvent, QPoint, QRectF, Qt
 from PySide6.QtGui import QKeyEvent
+from PySide6.QtTest import QTest
 
 from dekstopshot.core import Hotkey, Monitor, Settings, WindowTarget
-from dekstopshot.ui import KeyRecorder, MainWindow
+from dekstopshot.ui import DisplayMap, KeyRecorder, MainWindow
 
 
 def test_missing_monitor_is_explicit_and_does_not_select_first_available(qapp):
@@ -11,6 +12,51 @@ def test_missing_monitor_is_explicit_and_does_not_select_first_available(qapp):
     assert window.monitor_combo.currentData() is None
     assert "отключён" in window.monitor_detail.text()
     window.deleteLater()
+
+
+def test_monitor_map_preserves_mixed_screen_positions_when_readable(qapp):
+    display_map = DisplayMap()
+    display_map.resize(380, 140)
+    monitors = [
+        Monitor("main", "DISPLAY1", "Main", 0, 0, 2560, 1440, True),
+        Monitor("left", "DISPLAY2", "Left", -1440, -120, 1440, 1920),
+        Monitor("right", "DISPLAY3", "Right", 2560, 240, 1920, 1080),
+    ]
+    display_map.set_monitors(monitors, "main")
+    (main, left, right), compact = display_map._display_rects()
+    assert not compact
+    assert left.right() < main.left() < main.right() < right.left()
+    assert left.top() < main.top() < right.top()
+    assert main.width() > right.width()
+    display_map.deleteLater()
+
+
+def test_dense_monitor_map_reflows_and_each_monitor_is_clickable(qapp):
+    display_map = DisplayMap()
+    display_map.resize(300, 108)
+    monitors = [
+        Monitor(str(index), f"DISPLAY{index}", f"Screen {index}", 0, -index * 1440, 2560, 1440)
+        for index in range(12)
+    ]
+    display_map.set_monitors(monitors, monitors[-1].id)
+    picked = []
+    display_map.selected.connect(picked.append)
+    display_map.show()
+    try:
+        for width in (300, 240):
+            display_map.resize(width, 108)
+            qapp.processEvents()
+            rects, compact = display_map._display_rects()
+            assert compact
+            assert len(rects) == len(monitors)
+            assert all(QRectF(display_map.rect()).contains(rect) for rect in rects)
+            picked.clear()
+            for rect in rects:
+                QTest.mouseClick(display_map, Qt.MouseButton.LeftButton, pos=rect.center().toPoint())
+            assert picked == [monitor.id for monitor in monitors]
+    finally:
+        display_map.close()
+        display_map.deleteLater()
 
 
 def test_window_picker_distinguishes_identical_titles_by_handle_and_process(qapp):

@@ -104,6 +104,7 @@ class Settings:
     language: str = field(default_factory=_system_language)
     hotkey_passthrough: bool = True
     save_screenshots: bool = False
+    hide_tray_icon: bool = False
 
     @classmethod
     def from_dict(cls, data: dict) -> Settings:
@@ -119,9 +120,10 @@ class Settings:
         language = data.get("language", _system_language())
         passthrough = data.get("hotkey_passthrough", True)
         save_screenshots = data.get("save_screenshots", False)
+        hide_tray_icon = data.get("hide_tray_icon", False)
         if not isinstance(monitor_id, str) or len(monitor_id) > 4096:
             raise ValueError("Некорректный идентификатор монитора.")
-        if type(notifications) is not bool or type(hidden) is not bool:
+        if any(type(option) is not bool for option in (notifications, hidden, hide_tray_icon)):
             raise ValueError("Некорректные параметры настроек.")
         if mode not in ("monitor", "window"):
             raise ValueError("Неизвестный режим захвата.")
@@ -135,7 +137,7 @@ class Settings:
                    monitor_id=monitor_id, notifications=notifications,
                    start_hidden=hidden, capture_mode=mode,
                    language=language, hotkey_passthrough=passthrough,
-                   save_screenshots=save_screenshots)
+                   save_screenshots=save_screenshots, hide_tray_icon=hide_tray_icon)
 
 
 class SettingsStore:

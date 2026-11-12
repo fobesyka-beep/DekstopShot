@@ -131,7 +131,7 @@ def test_saving_preference_switches_language_without_emitting_setting_changes(qa
     assert requested == [("save_screenshots", True)]
     window.retranslate(settings)
     assert not window.save_screenshots.isChecked()
-    assert "буфере обмена" in window.capture_status.text()
+    assert "буфер обмена" in window.capture_status.text()
     assert requested == [("save_screenshots", True)]
     window.deleteLater()
 

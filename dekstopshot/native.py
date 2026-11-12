@@ -39,13 +39,8 @@ class DISPLAY_DEVICEW(C.Structure):
                 ("DeviceID", W.WCHAR * 128), ("DeviceKey", W.WCHAR * 128)]
 
 
-class ACCENT_POLICY(C.Structure):
-    _fields_ = [("AccentState", C.c_int32), ("AccentFlags", DWORD),
-                ("GradientColor", DWORD), ("AnimationId", DWORD)]
-
-
-class COMPOSITION_ATTRIBUTE_DATA(C.Structure):
-    _fields_ = [("attribute", C.c_int32), ("data", C.c_void_p), ("size", C.c_size_t)]
+class MARGINS(C.Structure):
+    _fields_ = [(side, C.c_int) for side in ("left", "right", "top", "bottom")]
 
 
 class ClipboardBusy(OSError):
@@ -109,9 +104,14 @@ class WindowsAPI:
         f(self.kernel, "GlobalUnlock", [HANDLE], W.BOOL)
         f(self.kernel, "GlobalFree", [HANDLE], HANDLE)
         f(self.kernel, "CreateMutexW", [C.c_void_p, W.BOOL, W.LPCWSTR], HANDLE)
+        f(self.kernel, "CreateEventW", [C.c_void_p, W.BOOL, W.BOOL, W.LPCWSTR], HANDLE)
+        f(self.kernel, "OpenEventW", [DWORD, W.BOOL, W.LPCWSTR], HANDLE)
+        f(self.kernel, "SetEvent", [HANDLE], W.BOOL)
+        f(self.kernel, "WaitForSingleObject", [HANDLE, DWORD], DWORD)
         f(self.kernel, "CloseHandle", [HANDLE], W.BOOL)
         f(self.dwm, "DwmSetWindowAttribute", [HANDLE, DWORD, C.c_void_p, DWORD], LONG)
         f(self.dwm, "DwmGetWindowAttribute", [HANDLE, DWORD, C.c_void_p, DWORD], LONG)
+        f(self.dwm, "DwmExtendFrameIntoClientArea", [HANDLE, C.POINTER(MARGINS)], LONG)
         f(self.dwm, "DwmFlush", [], LONG)
 
     def enable_dpi(self):
@@ -123,14 +123,35 @@ class WindowsAPI:
             # Supported target is Windows 10 1809+, kept for graceful degradation.
             self.user.SetProcessDPIAware()
 
-    def acquire_instance(self):
-        handle = self.kernel.CreateMutexW(None, False, "Local\\DekstopShot.Desktop.1")
+    def acquire_instance(self, name: str = "Local\\DekstopShot.Desktop.1"):
+        handle = self.kernel.CreateMutexW(None, False, name)
         if not handle:
             raise C.WinError(C.get_last_error())
         if C.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
             self.kernel.CloseHandle(handle)
             return None
         return handle
+
+    _REOPEN_EVENT = "Local\\DekstopShot.ShowWindow.1"
+
+    def create_reopen_event(self):
+        # Auto-reset, non-inheritable and limited to this Windows session.
+        handle = self.kernel.CreateEventW(None, False, False, self._REOPEN_EVENT)
+        if not handle:
+            raise C.WinError(C.get_last_error())
+        return handle
+
+    def request_reopen(self) -> bool:
+        handle = self.kernel.OpenEventW(0x0002, False, self._REOPEN_EVENT)  # EVENT_MODIFY_STATE
+        if not handle:
+            return False
+        try:
+            return bool(self.kernel.SetEvent(handle))
+        finally:
+            self.kernel.CloseHandle(handle)
+
+    def reopen_requested(self, handle) -> bool:
+        return self.kernel.WaitForSingleObject(handle, 0) == 0  # WAIT_OBJECT_0
 
     def monitors(self) -> list[Monitor]:
         result, errors = [], []
@@ -314,28 +335,21 @@ class WindowsAPI:
                     self.kernel.GlobalFree(handle)
 
     def apply_backdrop(self, hwnd: int) -> bool:
-        """Desktop blur behind the live window, not an image captured from the desktop."""
-        build = sys.getwindowsversion().build
-        if build >= 22000:
-            for attribute, value in ((20, 1), (33, 2)):
-                number = C.c_int(value)
-                self.dwm.DwmSetWindowAttribute(hwnd, attribute, C.byref(number), C.sizeof(number))
-        class Margins(C.Structure):
-            _fields_ = [(name, C.c_int) for name in ("left", "right", "top", "bottom")]
-        self._signature(self.dwm, "DwmExtendFrameIntoClientArea", [HANDLE, C.POINTER(Margins)], LONG)
-        margins = Margins(-1, -1, -1, -1)
-        self.dwm.DwmExtendFrameIntoClientArea(hwnd, C.byref(margins))
-        if build >= 22621:
-            value = C.c_int(3)  # DWMSBT_TRANSIENTWINDOW / Desktop Acrylic
-            if self.dwm.DwmSetWindowAttribute(hwnd, 38, C.byref(value), C.sizeof(value)) >= 0:
-                return True
-        # Windows 10 has no public Desktop Acrylic DWM attribute. This optional
-        # compositor entry point is checked at runtime, and never required for startup.
-        try:
-            compose = self._signature(self.user, "SetWindowCompositionAttribute",
-                                      [HANDLE, C.POINTER(COMPOSITION_ATTRIBUTE_DATA)], W.BOOL)
-        except AttributeError:
+        """Enable Desktop Acrylic with a single rounded edge on supported Windows."""
+        if sys.getwindowsversion().build < 22621:
             return False
-        accent = ACCENT_POLICY(4, 0, 0x664D3B28, 0)  # AABBGGRR translucent blue-grey tint
-        data = COMPOSITION_ATTRIBUTE_DATA(19, C.cast(C.pointer(accent), C.c_void_p), C.sizeof(accent))
-        return bool(compose(hwnd, C.byref(data)))
+
+        def set_attribute(attribute, value):
+            number = DWORD(value)
+            return self.dwm.DwmSetWindowAttribute(hwnd, attribute, C.byref(number), C.sizeof(number))
+
+        set_attribute(20, 1)  # DWMWA_USE_IMMERSIVE_DARK_MODE
+        if (set_attribute(33, 2) >= 0  # DWMWCP_ROUND
+                and self.dwm.DwmExtendFrameIntoClientArea(hwnd, C.byref(MARGINS(-1, -1, -1, -1))) >= 0
+                and set_attribute(38, 3) >= 0  # DWMSBT_TRANSIENTWINDOW: Desktop Acrylic.
+                and set_attribute(34, 0xFFFFFFFE) >= 0):  # Qt paints the only visible border.
+            return True
+
+        set_attribute(38, 1)  # DWMSBT_NONE, including if a previous call enabled it.
+        self.dwm.DwmExtendFrameIntoClientArea(hwnd, C.byref(MARGINS(0, 0, 0, 0)))
+        return False
