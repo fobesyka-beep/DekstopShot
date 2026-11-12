@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from dataclasses import replace
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -18,7 +19,7 @@ from .i18n import set_language, t
 from .native import ClipboardBusy, WindowsAPI
 from .pictures import PictureSaveJob
 from .services import QUICK_LINKS
-from .ui import STYLE, GlassDialog, HotkeyDialog, MainWindow, app_icon, button, label, service_icon
+from .ui import STYLE, GlassDialog, HotkeyDialog, MainWindow, app_icon, button, label, service_icon, set_window_backdrop
 from .updates import ReleaseInfo, UpdateChecker
 
 log = logging.getLogger("dekstopshot")
@@ -30,8 +31,10 @@ HELP_PARAGRAPHS = (
     "В боковой панели выберите русский или английский язык. При первом запуске язык определяется по системе.",
     "Если включено «Не блокировать клавишу», клавиша одновременно работает в других программах. "
     "Выключите этот режим, чтобы зарезервировать сочетание для снимка. На паузе захват отключён.",
-    "Крестик и «Скрыть в трей» скрывают настройки. Чтобы открыть их снова, нажмите значок рядом с часами. "
+    "Крестик и «Скрыть окно» скрывают настройки. Чтобы открыть их снова, нажмите значок рядом с часами. "
     "Для завершения выберите «Выйти из DekstopShot» в меню трея.",
+    "В режиме без значка повторно запустите DekstopShot, чтобы открыть настройки. "
+    "Кнопка «Выйти» завершает приложение.",
     "Для снимка приложения окно должно быть открыто и не свёрнуто. После закрытия окна или перезапуска "
     "DekstopShot выберите его заново.",
     "При запуске DekstopShot проверяет новые версии на GitHub. Если доступно обновление, откройте его страницу "
@@ -44,10 +47,11 @@ HELP_PARAGRAPHS = (
 
 
 class Controller(QObject):
-    def __init__(self, app: QApplication, api: WindowsAPI, *, check_updates=True,
+    def __init__(self, app: QApplication, api: WindowsAPI, *, check_updates=True, can_reopen=False,
                  store: SettingsStore | None = None, settings: Settings | None = None):
         super().__init__(app)
         self.app, self.api = app, api
+        self.can_reopen = can_reopen
         self.store = store if store is not None else SettingsStore()
         self.settings = settings if settings is not None else self.store.load()
         set_language(self.settings.language)
@@ -95,6 +99,9 @@ class Controller(QObject):
         self._update_state()
         if self.store.warning:
             self.window.show_message(self.store.warning, True)
+        elif self.settings.hide_tray_icon and not self.can_reopen:
+            self.error("Не удалось включить фоновый режим без значка в трее.")
+            force_show = True
         if force_show or not self.settings.start_hidden:
             self.show_window()
         else:
@@ -104,6 +111,9 @@ class Controller(QObject):
 
     def _connect_ui(self):
         self.window.surface_shown.connect(self.backdrop_refresh.start)
+        self.window.surface_shown.connect(self._sync_tray_visibility)
+        self.window.surface_hidden.connect(self._sync_tray_visibility)
+        self.window.quit_requested.connect(self.quit)
         self.window.capture_requested.connect(self.capture)
         self.window.monitor_requested.connect(self.select_monitor)
         self.window.window_requested.connect(self.select_window)
@@ -120,11 +130,11 @@ class Controller(QObject):
         if self.quitting or not self.window.isVisible():
             return
         try:
-            self.window.backdrop = self.api.apply_backdrop(int(self.window.winId()))
+            enabled = self.api.apply_backdrop(int(self.window.winId()))
         except (OSError, AttributeError) as error:
-            self.window.backdrop = False
+            enabled = False
             log.info("Desktop blur unavailable: %s", error)
-        self.window.update()
+        set_window_backdrop(self.window, enabled)
 
     def _style_dialog(self, dialog: GlassDialog):
         dialog.backdrop_timer = QTimer(dialog)
@@ -135,10 +145,10 @@ class Controller(QObject):
             if not dialog.isVisible():
                 return
             try:
-                dialog.backdrop = self.api.apply_backdrop(int(dialog.winId()))
+                enabled = self.api.apply_backdrop(int(dialog.winId()))
             except (OSError, AttributeError):
-                dialog.backdrop = False
-            dialog.update()
+                enabled = False
+            set_window_backdrop(dialog, enabled)
 
         dialog.backdrop_timer.timeout.connect(refresh)
         dialog.surface_shown.connect(dialog.backdrop_timer.start)
@@ -148,7 +158,12 @@ class Controller(QObject):
         self._refresh_tray_menu()
         self.tray.activated.connect(self._tray_activated)
         self.tray.messageClicked.connect(self.show_window)
-        self.tray.show()
+        self._sync_tray_visibility()
+
+    def _sync_tray_visibility(self):
+        without_icon = self.settings.hide_tray_icon and self.can_reopen
+        self.tray.setVisible(not self.quitting and (self.window.isVisible() or not without_icon))
+        self.window.quit_button.setVisible(self.settings.hide_tray_icon or not QSystemTrayIcon.isSystemTrayAvailable())
 
     def _refresh_tray_menu(self):
         previous = getattr(self, "menu", None)
@@ -180,10 +195,11 @@ class Controller(QObject):
             return
         self.update_release = release
         self.window.update_available(release.version, release.url)
-        self.tray.showMessage(t("Доступно обновление"),
-                              t("Доступна версия {version}. Откройте настройки, чтобы скачать её.",
-                                version=release.version),
-                              QSystemTrayIcon.MessageIcon.Information, 5000)
+        if self.tray.isVisible():
+            self.tray.showMessage(t("Доступно обновление"),
+                                  t("Доступна версия {version}. Откройте настройки, чтобы скачать её.",
+                                    version=release.version),
+                                  QSystemTrayIcon.MessageIcon.Information, 5000)
 
     def change_language(self, language: str):
         if language not in ("ru", "en") or language == self.settings.language:
@@ -204,6 +220,8 @@ class Controller(QObject):
             self.show_window()
 
     def show_window(self):
+        if self.quitting:
+            return
         if self.busy:
             self.restore_window = True
             return
@@ -286,7 +304,13 @@ class Controller(QObject):
         self.refresh_sources()
 
     def change_option(self, name: str, enabled: bool):
-        if name not in ("start_hidden", "hotkey_passthrough", "save_screenshots") or type(enabled) is not bool:
+        if name not in ("start_hidden", "hotkey_passthrough", "save_screenshots", "hide_tray_icon"):
+            return
+        if type(enabled) is not bool:
+            return
+        if name == "hide_tray_icon" and enabled and not self.can_reopen:
+            self.window.sync_settings(self.settings)
+            self.error("Не удалось включить фоновый режим без значка в трее.")
             return
         previous_mode = self.settings.hotkey_passthrough
         if name == "hotkey_passthrough":
@@ -316,6 +340,7 @@ class Controller(QObject):
     def _update_state(self):
         self.window.sync_settings(self.settings)
         self.window.set_state(self.paused, self.busy, self.unavailable)
+        self._sync_tray_visibility()
         self.pause_action.blockSignals(True)
         self.pause_action.setChecked(self.paused)
         self.pause_action.blockSignals(False)
@@ -466,8 +491,9 @@ class Controller(QObject):
         log.warning("%s", message)
         self.window.show_message(t(message), True)
         # Report failures; successful captures stay silent in the system tray.
-        self.tray.showMessage(t("DekstopShot — требуется внимание"), t(message),
-                              QSystemTrayIcon.MessageIcon.Warning, 4500)
+        if self.tray.isVisible():
+            self.tray.showMessage(t("DekstopShot — требуется внимание"), t(message),
+                                  QSystemTrayIcon.MessageIcon.Warning, 4500)
 
     def open_link(self, url: str):
         if not QDesktopServices.openUrl(QUrl(url)):
@@ -541,15 +567,21 @@ def main() -> int:
     startup_store = SettingsStore()
     startup_settings = startup_store.load()
     set_language(startup_settings.language)
-    if not QSystemTrayIcon.isSystemTrayAvailable():
-        QMessageBox.critical(None, "DekstopShot",
-                             t("Системный трей недоступен. Запустите приложение в обычном сеансе Windows."))
-        return 1
     mutex = api.acquire_instance()
     if not mutex:
-        QMessageBox.information(None, t("DekstopShot уже работает"),
-                                t("Откройте значок DekstopShot в трее рядом с часами. Он может быть скрыт под стрелкой ↑."))
+        # The first process can hold the mutex just before it creates the event.
+        for attempt in range(5):
+            if api.request_reopen():
+                return 0
+            if attempt < 4:
+                time.sleep(0.05)
+        message = ("Откройте значок DekstopShot в трее рядом с часами. Он может быть скрыт под стрелкой ↑."
+                   if not startup_settings.hide_tray_icon and QSystemTrayIcon.isSystemTrayAvailable()
+                   else "Не удалось открыть окно уже запущенного приложения.")
+        QMessageBox.information(None, t("DekstopShot уже работает"), t(message))
         return 0
+    reopen_event = None
+    reopen_timer = None
     try:
         try:
             log_path = configure_logging()
@@ -565,9 +597,30 @@ def main() -> int:
             QMessageBox.critical(None, "DekstopShot", text)
 
         sys.excepthook = exception_hook
-        controller = Controller(app, api, store=startup_store, settings=startup_settings)
+        try:
+            reopen_event = api.create_reopen_event()
+        except OSError:
+            log.warning("Could not create the activation event", exc_info=True)
+        if reopen_event is None and not QSystemTrayIcon.isSystemTrayAvailable():
+            QMessageBox.critical(None, "DekstopShot",
+                                 t("Системный трей недоступен. Запустите приложение в обычном сеансе Windows."))
+            return 1
+        controller = Controller(app, api, can_reopen=reopen_event is not None,
+                                store=startup_store, settings=startup_settings)
+        if reopen_event is not None:
+            def reopen_if_requested():
+                if api.reopen_requested(reopen_event):
+                    controller.show_window()
+
+            reopen_timer = QTimer(app)
+            reopen_timer.timeout.connect(reopen_if_requested)
+            reopen_timer.start(250)
         result = app.exec()
         controller.pool.waitForDone(10000)
         return result
     finally:
+        if reopen_timer is not None:
+            reopen_timer.stop()
+        if reopen_event is not None:
+            api.kernel.CloseHandle(reopen_event)
         api.kernel.CloseHandle(mutex)

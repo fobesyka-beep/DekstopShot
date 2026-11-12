@@ -23,9 +23,9 @@
   <a href="https://github.com/fobesyka-beep/DekstopShot/issues">Сообщить об ошибке</a>
 </p>
 
-**DekstopShot 1.2** — приложение на Python и PySide6 для захвата экрана или конкретного окна в системный буфер обмена Windows. Работает в трее, поддерживает глобальную горячую клавишу, несколько мониторов и разные масштабы DPI. Интерфейс в стиле Liquid Glass доступен **на русском и английском языках**. По желанию снимки также сохраняются в PNG в подпапке **DekstopShot** системной папки **«Изображения»**.
+**DekstopShot 1.3** — приложение на Python и PySide6 для захвата экрана или конкретного окна в системный буфер обмена Windows. Поддерживает глобальную горячую клавишу, несколько мониторов, разные масштабы DPI и работу в фоне без значка в трее. Интерфейс в стиле Liquid Glass доступен **на русском и английском языках**. По желанию снимки также сохраняются в PNG в подпапке **DekstopShot** системной папки **«Изображения»**.
 
-English overview: capture a selected monitor or application window straight to the Windows clipboard. Version 1.2 adds optional PNG saving to Pictures/DekstopShot and a cleaner interface. Russian/English UI, startup update checks and shared hotkeys remain available. Saving to files is off by default.
+English overview: capture a selected monitor or application window straight to the Windows clipboard, with optional PNG saving to Pictures/DekstopShot. Version 1.3 adds background operation without a tray icon and a more flexible monitor map. Russian/English UI, startup update checks and shared hotkeys are available. Saving to files is off by default.
 
 ![Интерфейс DekstopShot в режиме окна приложения](docs/preview-application.png)
 
@@ -43,7 +43,7 @@ English overview: capture a selected monitor or application window straight to t
 | Проверка обновлений | При запуске приложение проверяет последний стабильный GitHub Release и предлагает открыть его страницу, если версия новее. |
 | Системный буфер | Снимок публикуется в DIB и PNG для вставки через **Ctrl + V**. |
 | Сохранение в папку | Опция **Сохранять в «Изображения»** добавляет PNG в системную папку **Изображения\DekstopShot**; по умолчанию выключена. |
-| Работа в фоне | Крестик скрывает настройки в трей. Пауза освобождает горячую клавишу для обычного ввода. |
+| Работа в фоне | Крестик скрывает окно. Опция **«Работать без значка в трее»** убирает значок, пока окно скрыто. Пауза освобождает горячую клавишу. |
 | Быстрые ссылки | ChatGPT, Gemini, Claude и Google открываются в браузере; изображение пользователь вставляет вручную. |
 | Стеклянный интерфейс | Компактное окно, прозрачные капсулы, голубая кромка и блики; при недоступном размытии есть читаемый запасной фон. |
 
@@ -63,7 +63,7 @@ English overview: capture a selected monitor or application window straight to t
 
 Начиная с версии 1.1 **«Не блокировать клавишу»** / **“Allow the key in other apps”** включено по умолчанию: минус запускает снимок и одновременно поступает в активную программу. Если отключить эту опцию, клавиша резервируется для DekstopShot. Пауза останавливает захват и освобождает обработчик клавиатуры. Можно назначить, например, **Ctrl + Alt + S**. Поведение защищённых окон, программ с повышенными правами и системных сочетаний зависит от Windows; работа во всех таких контекстах не гарантируется.
 
-Пункт «При запуске — сразу в трей» не настраивает автозагрузку при входе в Windows.
+В режиме **«Работать без значка в трее»** повторный запуск `DekstopShot.exe` открывает окно уже работающего приложения. Завершить его можно кнопкой **«Выйти»**. Настройка **«При запуске скрывать окно»** действует при запуске программы вручную.
 
 ## Сохранение, язык и обновления
 
@@ -73,7 +73,7 @@ English overview: capture a selected monitor or application window straight to t
 
 Проверка новой версии выполняется в фоне при старте. Если опубликован более новый стабильный релиз, в настройках появляется ссылка на его страницу. Программа не устанавливает обновление автоматически. Отсутствие интернета, лимит запросов GitHub или отсутствие релизов не мешают работе приложения.
 
-Изменения выпуска: [DekstopShot 1.2.0](docs/releases/v1.2.0.md). История версий: [CHANGELOG.md](CHANGELOG.md).
+Изменения выпуска: [DekstopShot 1.3.0](docs/releases/v1.3.0.md). История версий: [CHANGELOG.md](CHANGELOG.md).
 
 Подробности о выборе источников, настройках и диагностике — в [инструкции](docs/USAGE.md).
 

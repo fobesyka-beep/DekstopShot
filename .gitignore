@@ -1,17 +1,29 @@
-.venv/
-.venv-python315-backup/
-.python312/
-.validation/
+# Local Python installations and virtual environments
+/.venv/
+/.venv-python315-backup/
+/.python312/
+
+# Python and test caches
 __pycache__/
+*.pyc
+*.pyo
 .pytest_cache/
 .ruff_cache/
-*.pyc
-build/
-dist/
-release/
-.idea/
-.tools/
+
+# Generated builds and local diagnostics
+/build/
+/dist/
+/release/
+/.validation/
+*.log
+
+# Local editor and Windows files
+/.idea/
+/.tools/
+Desktop.ini
+Thumbs.db
+
+# Local environment files
 .env
 .env.*
 !.env.example
-*.log
